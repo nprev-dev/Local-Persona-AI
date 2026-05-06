@@ -96,7 +96,7 @@ def _get_rvc():
     if _rvc is not None:
         return _rvc
     try:
-        from rvc_python.infer import RVCInference
+        from rvc_inferpy.infer import RVCInference
     except ImportError:
         raise RuntimeError("Run: pip install rvc-python")
 

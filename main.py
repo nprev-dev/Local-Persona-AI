@@ -1,10 +1,11 @@
 from fastapi import FastAPI, UploadFile, File
-from fastapi.responses import HTMLResponse
+from fastapi.responses import HTMLResponse, Response
 from openai import OpenAI
 import requests
 import json
 import re
 from pydantic import BaseModel
+from tts_engine import synthesize
 
 from memory_engine import (
     init_memory_db,
@@ -387,3 +388,17 @@ async def clear_chat_memory():
 async def clear_long_term_memory():
     clear_all_memories()
     return {"status": "ok", "message": "Long-term memory cleared."}
+
+class SpeakRequest(BaseModel):
+    text: str
+
+@app.post("/speak")
+async def speak(data: SpeakRequest):
+    audio_bytes = synthesize(data.text)
+    if not audio_bytes:
+        return Response(status_code=204)
+    return Response(
+        content    = audio_bytes,
+        media_type = "audio/wav",
+        headers    = {"Cache-Control": "no-store"}
+    )
