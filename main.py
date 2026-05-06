@@ -1,0 +1,389 @@
+from fastapi import FastAPI, UploadFile, File
+from fastapi.responses import HTMLResponse
+from openai import OpenAI
+import requests
+import json
+import re
+from pydantic import BaseModel
+
+from memory_engine import (
+    init_memory_db,
+    add_memory,
+    search_memory,
+    get_all_memories,
+    clear_all_memories,
+    ingest_text,
+    ingest_file,
+    memory_count
+)
+
+app = FastAPI()
+
+init_memory_db()
+
+client = None #OpenAI()
+
+USE_OPENAI = False
+
+CHAT_MODEL   = "qwen2.5:7b"
+MEMORY_MODEL = "phi3"
+
+CURRENT_MODEL       = "qwen2.5:7b"
+CURRENT_PERSONALITY = "default"
+
+
+class ChatRequest(BaseModel):
+    user_input: str
+
+class IngestRequest(BaseModel):
+    text:   str
+    source: str = "manual"
+
+
+# ── Thinking tag stripper ──────────────────────────────────────────────────────
+# qwen3 outputs <think>...</think> blocks before its reply.
+# We strip these so users only see the actual response.
+def strip_thinking(text: str) -> str:
+    cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+    return cleaned.strip()
+
+
+# ── Ollama API helpers ─────────────────────────────────────────────────────────
+# ask_ollama uses /api/chat (messages array) — supports proper system messages.
+# _ask_generate uses /api/generate (raw prompt) — used only by the memory judge.
+
+def ask_ollama(messages: list, model: str = CHAT_MODEL, max_tokens: int = 150) -> str:
+    """
+    Send a messages list to Ollama and return the reply string.
+    Uses /api/chat so system messages are passed natively to the model.
+    Strips qwen3 thinking blocks from the output automatically.
+    """
+    if model is None:
+        model = CURRENT_MODEL
+    response = requests.post(
+        "http://localhost:11434/api/chat",
+        json={
+            "model":   model,
+            "messages": messages,
+            "stream":  False,
+            "options": {"num_predict": max_tokens}
+        }
+    )
+    response.raise_for_status()
+    raw = response.json()["message"]["content"]
+    return strip_thinking(raw)
+
+
+def _ask_generate(prompt: str, model: str = MEMORY_MODEL, max_tokens: int = 180) -> str:
+    """
+    Raw prompt → response via /api/generate.
+    Used internally by the memory judge which builds its own flat prompt.
+    """
+    response = requests.post(
+        "http://localhost:11434/api/generate",
+        json={
+            "model":   model,
+            "prompt":  prompt,
+            "stream":  False,
+            "options": {"num_predict": max_tokens}
+        }
+    )
+    response.raise_for_status()
+    raw = response.json()["response"]
+    return strip_thinking(raw)
+
+
+def ask_openai(messages: list) -> str:
+    response = client.chat.completions.create(
+        model="gpt-4.1-mini",
+        messages=messages
+    )
+    return response.choices[0].message.content
+
+
+# ── Chat history ───────────────────────────────────────────────────────────────
+
+def load_chat_memory():
+    try:
+        with open("memory.json", "r", encoding="utf-8") as f:
+            return json.load(f)
+    except:
+        return []
+
+
+def save_chat_memory(data):
+    with open("memory.json", "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+
+
+# ── Prompt builders ────────────────────────────────────────────────────────────
+
+def memories_to_text(memories):
+    if not memories:
+        return "No relevant long-term memories found."
+    text = ""
+    for memory in memories:
+        text += f"- [{memory['category']}] {memory['content']} (importance {memory['importance']}/10)\n"
+    return text.strip()
+
+
+def build_chat_messages(user_input: str, recent_chat: list, relevant_memories: list) -> list:
+    """
+    Build a proper messages list for /api/chat.
+    System message carries the personality + relevant memories.
+    Recent chat history is passed as alternating user/assistant turns.
+    """
+    system_content = (
+        "You are a personal local AI assistant.\n\n"
+        "Use the long-term memories only when relevant. "
+        "Do not dump memories unless the user asks. "
+        "Be natural, helpful, and consistent.\n\n"
+        "RELEVANT LONG-TERM MEMORIES:\n"
+        f"{memories_to_text(relevant_memories)}"
+    )
+
+    messages = [{"role": "system", "content": system_content}]
+
+    # Add the last 10 conversation turns
+    for msg in recent_chat[-10:]:
+        role    = msg.get("role", "user")
+        content = msg.get("content", "")
+        if role in ("user", "assistant") and content:
+            messages.append({"role": role, "content": content})
+
+    messages.append({"role": "user", "content": user_input})
+    return messages
+
+
+def build_memory_judge_prompt(user_input, assistant_reply):
+    return f"""
+You are a local memory manager for a personal AI assistant.
+
+Decide if the user's message contains information worth saving long-term.
+
+Save only stable useful facts, such as:
+- identity
+- preferences
+- goals
+- projects
+- hardware/software setup
+- recurring interests
+- communication style
+- important plans
+
+Ignore:
+- random temporary details
+- one-time emotions
+- useless small talk
+- things that probably won't matter later
+
+Return ONLY valid JSON.
+
+If worth saving:
+{{
+  "should_store": true,
+  "category": "projects",
+  "content": "User is building a local anime AI assistant on Windows.",
+  "importance": 9
+}}
+
+If not worth saving:
+{{
+  "should_store": false
+}}
+
+User message:
+{user_input}
+
+Assistant reply:
+{assistant_reply}
+""".strip()
+
+
+def extract_memory(user_input, assistant_reply):
+    prompt = build_memory_judge_prompt(user_input, assistant_reply)
+    raw    = _ask_generate(prompt, model=MEMORY_MODEL, max_tokens=180)
+
+    try:
+        start = raw.find("{")
+        end   = raw.rfind("}") + 1
+
+        if start == -1 or end == 0:
+            return None
+
+        data = json.loads(raw[start:end])
+
+        if not data.get("should_store"):
+            return None
+
+        category   = data.get("category", "general")
+        content    = data.get("content", "").strip()
+        importance = int(data.get("importance", 5))
+
+        if not content:
+            return None
+
+        return {"category": category, "content": content, "importance": importance}
+
+    except:
+        return None
+
+
+# ── Routes ─────────────────────────────────────────────────────────────────────
+
+@app.get("/", response_class=HTMLResponse)
+async def home():
+    try:
+        with open("index.html", "r", encoding="utf-8") as f:
+            return f.read()
+    except FileNotFoundError:
+        return "<h1>index.html not found</h1>"
+
+
+@app.post("/chat")
+async def chat(data: ChatRequest):
+    user_input = data.user_input.strip()
+
+    chat_memory       = load_chat_memory()
+    relevant_memories = search_memory(user_input, limit=6)
+
+    if USE_OPENAI:
+        messages = [
+            {
+                "role": "system",
+                "content": (
+                    "You are a personal AI assistant. "
+                    "Use relevant long-term memories naturally.\n\n"
+                    f"{memories_to_text(relevant_memories)}"
+                )
+            }
+        ] + chat_memory[-10:] + [
+            {"role": "user", "content": user_input}
+        ]
+
+        reply = ask_openai(messages)
+        mode  = "SMART MODE"
+    else:
+        messages = build_chat_messages(user_input, chat_memory, relevant_memories)
+        reply    = ask_ollama(messages, model=CURRENT_MODEL)
+        mode     = "LOCAL MODE"
+
+    chat_memory.append({"role": "user",      "content": user_input})
+    chat_memory.append({"role": "assistant", "content": reply})
+
+    if len(chat_memory) > 60:
+        chat_memory = chat_memory[-60:]
+
+    save_chat_memory(chat_memory)
+
+    new_memory    = extract_memory(user_input, reply)
+    memory_saved  = False
+
+    if new_memory:
+        memory_saved = add_memory(
+            category   = new_memory["category"],
+            content    = new_memory["content"],
+            importance = new_memory["importance"],
+            source     = "chat"
+        )
+
+    counts = memory_count()
+
+    return {
+        "response":     reply,
+        "mode":         mode,
+        "memory_saved": memory_saved,
+        "memory_count": counts
+    }
+
+
+@app.post("/ingest")
+async def ingest(data: IngestRequest):
+    """
+    Load raw text into the document memory.
+    The AI will be able to search this content when answering questions.
+    """
+    text   = data.text.strip()
+    source = data.source.strip() or "manual"
+
+    if not text:
+        return {"status": "error", "message": "No text provided.", "chunks_stored": 0}
+
+    stored = ingest_text(text, source=source)
+    counts = memory_count()
+
+    return {
+        "status":        "ok",
+        "chunks_stored": stored,
+        "source":        source,
+        "memory_count":  counts
+    }
+
+
+@app.post("/ingest-file")
+async def ingest_file_upload(file: UploadFile = File(...)):
+    """
+    Upload a .txt or .md file and load its contents into document memory.
+    """
+    content = await file.read()
+    try:
+        text = content.decode("utf-8", errors="ignore")
+    except Exception:
+        return {"status": "error", "message": "Could not decode file."}
+
+    stored = ingest_text(text, source=file.filename or "uploaded_file")
+    counts = memory_count()
+
+    return {
+        "status":        "ok",
+        "filename":      file.filename,
+        "chunks_stored": stored,
+        "memory_count":  counts
+    }
+
+
+@app.get("/memories")
+async def memories():
+    return get_all_memories()
+
+
+@app.get("/memory-count")
+async def get_memory_count():
+    return memory_count()
+
+
+@app.get("/settings")
+async def get_settings():
+    return {
+        "model":       CURRENT_MODEL,
+        "personality": CURRENT_PERSONALITY
+    }
+
+
+@app.post("/settings")
+async def update_settings(settings: dict):
+    global CURRENT_MODEL, CURRENT_PERSONALITY
+
+    if "model" in settings:
+        CURRENT_MODEL = settings["model"]
+
+    if "personality" in settings:
+        CURRENT_PERSONALITY = settings["personality"]
+
+    return {
+        "status":      "ok",
+        "model":       CURRENT_MODEL,
+        "personality": CURRENT_PERSONALITY
+    }
+
+
+@app.post("/clear-memory")
+async def clear_chat_memory():
+    save_chat_memory([])
+    return {"status": "ok", "message": "Chat memory cleared."}
+
+
+@app.post("/clear-long-term-memory")
+async def clear_long_term_memory():
+    clear_all_memories()
+    return {"status": "ok", "message": "Long-term memory cleared."}

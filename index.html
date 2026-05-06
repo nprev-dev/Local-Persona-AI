@@ -1,0 +1,472 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <title>Local AI Assistant</title>
+  <style>
+    body {
+      margin: 0;
+      font-family: Arial;
+      background: #0f1115;
+      color: white;
+      display: flex;
+      height: 100vh;
+    }
+
+    .sidebar {
+      width: 300px;
+      background: #171a21;
+      border-right: 1px solid #2a2f3a;
+      padding: 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 14px;
+      overflow-y: auto;
+    }
+
+    .character {
+      flex: 0 0 180px;
+      border: 2px dashed #333;
+      border-radius: 15px;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+      color: #888;
+      text-align: center;
+    }
+
+    .status {
+      font-size: 13px;
+      opacity: 0.7;
+      line-height: 1.7;
+    }
+
+    .memory-stats {
+      background: #1e2330;
+      border: 1px solid #2a2f3a;
+      border-radius: 10px;
+      padding: 10px 14px;
+      font-size: 13px;
+    }
+
+    .memory-stats .label {
+      opacity: 0.55;
+      margin-bottom: 4px;
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.05em;
+    }
+
+    .memory-stats .row {
+      display: flex;
+      justify-content: space-between;
+      margin: 2px 0;
+    }
+
+    .memory-stats .val {
+      color: #6ab0ff;
+      font-weight: bold;
+    }
+
+    /* ── Ingest panel ────────────────────────────────────── */
+    .ingest-panel {
+      background: #1e2330;
+      border: 1px solid #2a2f3a;
+      border-radius: 10px;
+      padding: 12px;
+    }
+
+    .ingest-panel .panel-title {
+      font-size: 12px;
+      text-transform: uppercase;
+      letter-spacing: 0.06em;
+      opacity: 0.5;
+      margin-bottom: 8px;
+    }
+
+    .ingest-panel textarea {
+      width: 100%;
+      height: 90px;
+      background: #131720;
+      color: white;
+      border: 1px solid #333;
+      border-radius: 8px;
+      padding: 8px;
+      font-size: 12px;
+      resize: vertical;
+      box-sizing: border-box;
+      font-family: Arial;
+    }
+
+    .ingest-panel input[type="text"] {
+      width: 100%;
+      background: #131720;
+      color: white;
+      border: 1px solid #333;
+      border-radius: 8px;
+      padding: 7px 9px;
+      font-size: 12px;
+      box-sizing: border-box;
+      margin-top: 6px;
+    }
+
+    .ingest-panel .ingest-row {
+      display: flex;
+      gap: 6px;
+      margin-top: 8px;
+    }
+
+    .ingest-panel .ingest-row button {
+      flex: 1;
+      padding: 8px 0;
+      border-radius: 8px;
+      border: none;
+      cursor: pointer;
+      font-size: 12px;
+    }
+
+    .btn-ingest  { background: #4e7cff; color: white; }
+    .btn-upload  { background: #333;    color: white; }
+
+    .ingest-status {
+      font-size: 11px;
+      opacity: 0.6;
+      margin-top: 6px;
+      min-height: 16px;
+    }
+
+    /* ── Main area ────────────────────────────────────────── */
+    .main {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+    }
+
+    .topbar {
+      padding: 15px;
+      border-bottom: 1px solid #2a2f3a;
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+    }
+
+    .topbar-right {
+      display: flex;
+      align-items: center;
+      gap: 14px;
+      font-size: 13px;
+      opacity: 0.7;
+    }
+
+    .memory-badge {
+      background: #1e2330;
+      border: 1px solid #2a2f3a;
+      border-radius: 6px;
+      padding: 3px 9px;
+      font-size: 12px;
+    }
+
+    .memory-saved-indicator {
+      display: none;
+      color: #6ab0ff;
+      font-size: 12px;
+    }
+
+    .chat {
+      flex: 1;
+      padding: 15px;
+      overflow-y: auto;
+    }
+
+    .msg {
+      margin: 10px 0;
+      padding: 10px 14px;
+      border-radius: 12px;
+      max-width: 70%;
+      white-space: pre-wrap;
+      line-height: 1.5;
+    }
+
+    .user { background: #3a6df0; margin-left: auto; }
+    .ai   { background: #232834; }
+
+    .msg .source-tag {
+      font-size: 10px;
+      opacity: 0.45;
+      margin-top: 4px;
+    }
+
+    .input-area {
+      display: flex;
+      padding: 10px;
+      border-top: 1px solid #2a2f3a;
+    }
+
+    input#input {
+      flex: 1;
+      padding: 12px;
+      border-radius: 10px;
+      border: none;
+      background: #1a1f27;
+      color: white;
+    }
+
+    button {
+      margin-left: 10px;
+      padding: 0 16px;
+      border-radius: 10px;
+      border: none;
+      cursor: pointer;
+    }
+
+    .send  { background: #4e7cff; color: white; }
+    .clear { background: #333;    color: white; }
+
+    /* hidden file input */
+    #fileInput { display: none; }
+  </style>
+</head>
+
+<body>
+
+<div class="sidebar">
+
+  <div class="character">
+    Character panel<br>
+    (will add avatar later)
+  </div>
+
+  <!-- Memory stats -->
+  <div class="memory-stats">
+    <div class="label">Memory</div>
+    <div class="row">
+      <span>Facts saved</span>
+      <span class="val" id="statFacts">—</span>
+    </div>
+    <div class="row">
+      <span>Doc chunks</span>
+      <span class="val" id="statChunks">—</span>
+    </div>
+  </div>
+
+  <!-- Document ingestion panel -->
+  <div class="ingest-panel">
+    <div class="panel-title">Load knowledge</div>
+
+    <textarea id="ingestText" placeholder="Paste text you want the AI to remember (notes, docs, facts...)"></textarea>
+    <input type="text" id="ingestSource" placeholder='Source label (e.g. "my notes")'>
+
+    <div class="ingest-row">
+      <button class="btn-ingest" onclick="ingestText()">Save text</button>
+      <button class="btn-upload" onclick="document.getElementById('fileInput').click()">Upload file</button>
+    </div>
+
+    <div class="ingest-status" id="ingestStatus"></div>
+
+    <!-- Hidden file input for .txt / .md uploads -->
+    <input type="file" id="fileInput" accept=".txt,.md,.py,.js,.ts,.json,.csv,.yaml,.yml,.html,.css"
+           onchange="uploadFile(this)">
+  </div>
+
+  <div class="status">
+    Status:<br>
+    UI: ready<br>
+    Memory: hybrid (BM25 + FAISS)<br>
+    Voice: later<br>
+    Vision: later
+  </div>
+
+</div>
+
+<div class="main">
+
+  <div class="topbar">
+    <div>Local AI Assistant</div>
+    <div class="topbar-right">
+      <span class="memory-saved-indicator" id="memorySavedIndicator">💾 Memory saved</span>
+      <span class="memory-badge" id="mode">Mode: ?</span>
+    </div>
+  </div>
+
+  <div class="chat" id="chat"></div>
+
+  <div class="input-area">
+    <input id="input" placeholder="Type message..." />
+    <button class="clear" onclick="clearMemory()">Clear</button>
+    <button class="send"  onclick="send()">Send</button>
+  </div>
+
+</div>
+
+<script>
+const chat  = document.getElementById("chat");
+const input = document.getElementById("input");
+const mode  = document.getElementById("mode");
+
+// ── Chat ──────────────────────────────────────────────────────
+
+function add(text, type, tag = "") {
+  const div = document.createElement("div");
+  div.className = "msg " + type;
+  div.textContent = text;
+  if (tag) {
+    const t = document.createElement("div");
+    t.className = "source-tag";
+    t.textContent = tag;
+    div.appendChild(t);
+  }
+  chat.appendChild(div);
+  chat.scrollTop = chat.scrollHeight;
+}
+
+let memorySavedTimer = null;
+
+async function send() {
+  const text = input.value.trim();
+  if (!text) return;
+
+  add(text, "user");
+  input.value = "";
+
+  const loading = document.createElement("div");
+  loading.className = "msg ai";
+  loading.textContent = "Thinking...";
+  chat.appendChild(loading);
+
+  try {
+    const res  = await fetch("/chat", {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ user_input: text })
+    });
+
+    const data = await res.json();
+
+    loading.remove();
+    add(data.response, "ai");
+    mode.textContent = "Mode: " + data.mode;
+
+    if (data.memory_saved) {
+      showMemorySaved();
+    }
+
+    if (data.memory_count) {
+      updateStats(data.memory_count);
+    }
+
+  } catch (e) {
+    loading.remove();
+    add("Error contacting server", "ai");
+  }
+}
+
+function showMemorySaved() {
+  const el = document.getElementById("memorySavedIndicator");
+  el.style.display = "inline";
+  if (memorySavedTimer) clearTimeout(memorySavedTimer);
+  memorySavedTimer = setTimeout(() => { el.style.display = "none"; }, 3000);
+}
+
+async function clearMemory() {
+  await fetch("/clear-memory", { method: "POST" });
+  chat.innerHTML = "";
+}
+
+input.addEventListener("keydown", e => {
+  if (e.key === "Enter") send();
+});
+
+// ── Memory stats ──────────────────────────────────────────────
+
+function updateStats(counts) {
+  if (!counts) return;
+  document.getElementById("statFacts").textContent  = counts.facts  ?? "—";
+  document.getElementById("statChunks").textContent = counts.chunks ?? "—";
+}
+
+async function loadStats() {
+  try {
+    const res  = await fetch("/memory-count");
+    const data = await res.json();
+    updateStats(data);
+  } catch (_) {}
+}
+
+loadStats();
+
+// ── Document ingestion ────────────────────────────────────────
+
+function setIngestStatus(msg, ok = true) {
+  const el = document.getElementById("ingestStatus");
+  el.textContent  = msg;
+  el.style.color  = ok ? "#6ab0ff" : "#ff6b6b";
+}
+
+async function ingestText() {
+  const text   = document.getElementById("ingestText").value.trim();
+  const source = document.getElementById("ingestSource").value.trim() || "manual";
+
+  if (!text) {
+    setIngestStatus("Paste some text first.", false);
+    return;
+  }
+
+  setIngestStatus("Saving...");
+
+  try {
+    const res  = await fetch("/ingest", {
+      method:  "POST",
+      headers: { "Content-Type": "application/json" },
+      body:    JSON.stringify({ text, source })
+    });
+
+    const data = await res.json();
+
+    if (data.status === "ok") {
+      setIngestStatus(`✓ Saved ${data.chunks_stored} chunks from "${source}"`);
+      document.getElementById("ingestText").value = "";
+      updateStats(data.memory_count);
+    } else {
+      setIngestStatus(data.message || "Something went wrong.", false);
+    }
+
+  } catch (e) {
+    setIngestStatus("Server error.", false);
+  }
+}
+
+async function uploadFile(input) {
+  const file = input.files[0];
+  if (!file) return;
+
+  setIngestStatus(`Uploading ${file.name}...`);
+
+  const form = new FormData();
+  form.append("file", file);
+
+  try {
+    const res  = await fetch("/ingest-file", {
+      method: "POST",
+      body:   form
+    });
+
+    const data = await res.json();
+
+    if (data.status === "ok") {
+      setIngestStatus(`✓ Loaded ${data.chunks_stored} chunks from "${data.filename}"`);
+      updateStats(data.memory_count);
+    } else {
+      setIngestStatus(data.message || "Upload failed.", false);
+    }
+
+  } catch (e) {
+    setIngestStatus("Upload error.", false);
+  }
+
+  // Reset file input so the same file can be re-uploaded
+  input.value = "";
+}
+</script>
+
+</body>
+</html>

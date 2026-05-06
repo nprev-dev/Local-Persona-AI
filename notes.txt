@@ -1,0 +1,7 @@
+# in startai.bat #change mistral to phi3(faster) or llama3(smarter). Rn its quen3:14b-4bit cuz its slow. Remove -4bit when fast
+# in main.py, memory_model use phi-3 for fast memory. Use mistral for smarter
+
+under cd 
+
+echo Starting Ollama...
+start "Ollama" cmd /k "ollama run qwen3:14b-4bit" 
