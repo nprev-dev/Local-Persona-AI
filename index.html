@@ -224,6 +224,11 @@
 
     /* hidden file input */
     #fileInput { display: none; }
+
+    .tts-toggle { display: flex; align-items: center; gap: 8px; font-size: 13px; cursor: pointer; user-select: none; }
+    .tts-toggle input[type="checkbox"] { accent-color: #4e7cff; width: 15px; height: 15px; cursor: pointer; }
+    .msg-audio { margin-top: 6px; width: 100%; max-width: 280px; height: 28px; display: block; opacity: 0.75; border-radius: 6px; }
+    .speaking-indicator { display: none; font-size: 12px; color: #a78bfa; }
   </style>
 </head>
 
@@ -260,7 +265,7 @@
       <button class="btn-ingest" onclick="ingestText()">Save text</button>
       <button class="btn-upload" onclick="document.getElementById('fileInput').click()">Upload file</button>
     </div>
-
+    
     <div class="ingest-status" id="ingestStatus"></div>
 
     <!-- Hidden file input for .txt / .md uploads -->
@@ -276,6 +281,11 @@
     Vision: later
   </div>
 
+  <label class="tts-toggle">
+      <input type="checkbox" id="autoPlayToggle" checked>
+      Autoplay voice
+    </label>
+
 </div>
 
 <div class="main">
@@ -285,6 +295,7 @@
     <div class="topbar-right">
       <span class="memory-saved-indicator" id="memorySavedIndicator">💾 Memory saved</span>
       <span class="memory-badge" id="mode">Mode: ?</span>
+      <span class="speaking-indicator" id="speakingIndicator">🔊 Speaking...</span>
     </div>
   </div>
 
@@ -343,7 +354,7 @@ async function send() {
     const data = await res.json();
 
     loading.remove();
-    add(data.response, "ai");
+    addAIMessage(data.response); // was: add(data.response, "ai");
     mode.textContent = "Mode: " + data.mode;
 
     if (data.memory_saved) {
@@ -466,6 +477,54 @@ async function uploadFile(input) {
   // Reset file input so the same file can be re-uploaded
   input.value = "";
 }
+
+async function addAIMessage(text) {
+  const div = document.createElement("div");
+  div.className = "msg ai";
+  div.textContent = text;
+  const audio = document.createElement("audio");
+  audio.className = "msg-audio";
+  audio.controls = true;
+  audio.style.display = "none";
+  div.appendChild(audio);
+  chat.appendChild(div);
+  chat.scrollTop = chat.scrollHeight;
+  await loadAudio(text, audio);
+}
+
+async function loadAudio(text, audioEl) {
+  try {
+    const res = await fetch("/speak", {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ text })
+    });
+    if (res.status === 204) return;
+    const blob = await res.blob();
+    audioEl.src = URL.createObjectURL(blob);
+    audioEl.style.display = "block";
+    if (document.getElementById("autoPlayToggle").checked) playAudio(audioEl);
+  } catch (e) { console.warn("[TTS]", e); }
+}
+
+function playAudio(audioEl) {
+  const indicator = document.getElementById("speakingIndicator");
+  document.querySelectorAll(".msg-audio").forEach(a => {
+    if (a !== audioEl && !a.paused) { a.pause(); a.currentTime = 0; }
+  });
+  indicator.style.display = "inline";
+  audioEl.play().catch(() => { indicator.style.display = "none"; });
+  audioEl.onended = () => {
+    indicator.style.display = "none";
+    URL.revokeObjectURL(audioEl.src);
+  };
+}
+
+const autoPlayToggle = document.getElementById("autoPlayToggle");
+autoPlayToggle.checked = localStorage.getItem("ttsAutoPlay") !== "false";
+autoPlayToggle.addEventListener("change", () => {
+  localStorage.setItem("ttsAutoPlay", autoPlayToggle.checked);
+});
 </script>
 
 </body>

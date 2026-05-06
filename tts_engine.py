@@ -13,8 +13,8 @@ from pathlib import Path
 # CONFIGURE THESE — rename to match your actual filenames
 # ─────────────────────────────────────────────────────────────────────────────
 
-VOICE_PTH   = "voices/your_voice.pth"      # rename to your .pth filename
-VOICE_INDEX = "voices/your_voice.index"    # rename to your .index filename
+VOICE_PTH   = "voices/AemeathJP_e250_s7250.pth"                      # name of ur voices .pth filename
+VOICE_INDEX = "voices/added_IVF791_Flat_nprobe_1_AemeathJP_v2.index" # name of ur voices .index filename
 
 # Overall pitch shift in semitones. 0 = no change.
 # If the final voice sounds too high, try -2. Too low, try +2.
