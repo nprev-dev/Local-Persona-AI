@@ -211,7 +211,13 @@ def synthesize(text: str) -> bytes:
 
         chunks = []
         for result in kokoro(text, voice=profile["voice"], speed=profile["speed"]):
-            audio = result[2] if isinstance(result, tuple) else result.audio
+            try:
+                audio = result.audio
+            except AttributeError:
+                try:
+                    audio = result[2]
+                except (TypeError, IndexError):
+                    audio = result
             if audio is not None:
                 chunks.append(audio)
 
