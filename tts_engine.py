@@ -1,37 +1,15 @@
-# tts_engine.py — Expressive TTS pipeline
+# tts_engine.py — Kokoro TTS with emotion detection (no RVC)
 #
-# Flow:  text → emotion detection → Kokoro TTS → RVC (your voice) → WAV bytes
-#
-# pip install kokoro soundfile transformers rvc-python
+# pip install kokoro soundfile transformers
 
-import os
+import io
 import re
-import tempfile
 from pathlib import Path
 
 # ─────────────────────────────────────────────────────────────────────────────
-# CONFIGURE THESE — rename to match your actual filenames
+# CONFIGURE
 # ─────────────────────────────────────────────────────────────────────────────
 
-VOICE_PTH   = "voices/AemeathJP_e250_s7250.pth"                      # name of ur voices .pth filename
-VOICE_INDEX = "voices/added_IVF791_Flat_nprobe_1_AemeathJP_v2.index" # name of ur voices .index filename
-
-# Overall pitch shift in semitones. 0 = no change.
-# If the final voice sounds too high, try -2. Too low, try +2.
-BASE_PITCH = 0
-
-# How much to follow the RVC voice model (0.0 to 1.0)
-# 0.75 is the sweet spot. Lower = more stable. Higher = more like the model.
-INDEX_RATE = 0.75
-
-# ── Emotion profiles ──────────────────────────────────────────────────────────
-# voice:  which Kokoro voice variant to use as base
-#   af_sky    — light, airy, youthful       <- used for energetic emotions
-#   af_bella  — warm, expressive, natural   <- used for neutral/happy
-#   af_sarah  — calm, measured, softer      <- used for sad/scared
-# pitch:  semitones added on top of BASE_PITCH for this emotion
-# speed:  1.0 = normal. 1.08 = 8% faster. 0.92 = 8% slower.
-# ─────────────────────────────────────────────────────────────────────────────
 EMOTION_PROFILES = {
     "joy":      {"voice": "af_bella", "pitch": +2, "speed": 1.07},
     "surprise": {"voice": "af_sky",   "pitch": +3, "speed": 1.08},
@@ -45,12 +23,11 @@ EMOTION_PROFILES = {
 KOKORO_SAMPLE_RATE = 24000
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Singletons — loaded once on first use so startup stays fast
+# Singletons
 # ─────────────────────────────────────────────────────────────────────────────
 
 _kokoro     = None
 _classifier = None
-_rvc        = None
 
 
 def _get_kokoro():
@@ -62,16 +39,12 @@ def _get_kokoro():
     except ImportError:
         raise RuntimeError("Run: pip install kokoro soundfile")
     print("[TTS] Loading Kokoro...")
-    _kokoro = KPipeline(lang_code="a")  # 'a' = American English
+    _kokoro = KPipeline(lang_code="a")
     print("[TTS] Kokoro ready")
     return _kokoro
 
 
 def _get_classifier():
-    """
-    Loads j-hartmann/emotion-english-distilroberta-base (~330MB, downloads once).
-    Falls back to simple keyword rules if it can't load.
-    """
     global _classifier
     if _classifier is not None:
         return _classifier
@@ -81,40 +54,14 @@ def _get_classifier():
         _classifier = hf_pipeline(
             "text-classification",
             model  = "j-hartmann/emotion-english-distilroberta-base",
-            device = 0,     # GPU. Change to -1 if you get CUDA errors.
+            device = 0,
             top_k  = 1
         )
         print("[TTS] Emotion classifier ready")
     except Exception as e:
-        print(f"[TTS] Emotion classifier failed ({e}) - using keyword fallback")
+        print(f"[TTS] Emotion classifier unavailable ({e}) - using keyword fallback")
         _classifier = "fallback"
     return _classifier
-
-
-def _get_rvc():
-    global _rvc
-    if _rvc is not None:
-        return _rvc
-    try:
-        from rvc_inferpy.infer import RVCInference
-    except ImportError:
-        raise RuntimeError("Run: pip install rvc-python")
-
-    pth   = Path(VOICE_PTH)
-    index = Path(VOICE_INDEX)
-
-    if not pth.exists():
-        raise FileNotFoundError(
-            f"\n[TTS] Voice model not found: {pth}\n"
-            f"      Make sure your .pth file is in the voices/ folder\n"
-            f"      and that VOICE_PTH in tts_engine.py matches the filename."
-        )
-
-    print(f"[TTS] Loading RVC voice: {pth.name} ...")
-    _rvc = RVCInference(device="cuda:0")  # uses your 3060
-    _rvc.load_model(str(pth), str(index) if index.exists() else "")
-    print("[TTS] RVC voice loaded")
-    return _rvc
 
 
 # ─────────────────────────────────────────────────────────────────────────────
@@ -122,9 +69,7 @@ def _get_rvc():
 # ─────────────────────────────────────────────────────────────────────────────
 
 def detect_emotion(text: str) -> str:
-    """Returns one of: joy, surprise, sadness, anger, fear, disgust, neutral"""
     clf = _get_classifier()
-
     if clf != "fallback":
         try:
             result = clf(text[:512])[0]
@@ -133,14 +78,11 @@ def detect_emotion(text: str) -> str:
                 return label
         except Exception:
             pass
-
     return _keyword_emotion(text)
 
 
 def _keyword_emotion(text: str) -> str:
-    """Simple fallback - reads keywords and punctuation."""
     t = text.lower()
-
     if any(w in t for w in ["wow", "omg", "no way", "seriously", "whoa"]) or text.count("!") >= 2:
         return "surprise"
     if any(w in t for w in ["happy", "love", "great", "awesome", "yay", "excited", "fun", "wonderful"]):
@@ -151,12 +93,11 @@ def _keyword_emotion(text: str) -> str:
         return "anger"
     if any(w in t for w in ["scared", "afraid", "nervous", "worried", "anxious"]):
         return "fear"
-
     return "neutral"
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Text cleaning - strips things that sound weird when spoken
+# Text cleaning
 # ─────────────────────────────────────────────────────────────────────────────
 
 def _clean(text: str) -> str:
@@ -166,91 +107,55 @@ def _clean(text: str) -> str:
     text = re.sub(r"[*_#]", "", text)
     text = re.sub(r"https?://\S+", "", text)
     text = re.sub(r"\s+", " ", text).strip()
-
     words = text.split()
     if len(words) > 100:
         text = " ".join(words[:100]) + "."
-
     return text
 
 
 # ─────────────────────────────────────────────────────────────────────────────
-# Main function - called from main.py
+# Main
 # ─────────────────────────────────────────────────────────────────────────────
 
 def synthesize(text: str) -> bytes:
-    """
-    Full pipeline: text -> emotion -> Kokoro TTS -> RVC -> WAV bytes.
-    Returns empty bytes on failure so the chat keeps working.
-    """
     text = _clean(text)
     if not text:
         return b""
 
     emotion = detect_emotion(text)
     profile = EMOTION_PROFILES.get(emotion, EMOTION_PROFILES["neutral"])
-
-    print(f"[TTS] '{emotion}' -> voice={profile['voice']} "
-          f"pitch={BASE_PITCH + profile['pitch']:+d} speed={profile['speed']}")
-
-    tmp_kokoro = None
-    tmp_rvc    = None
+    print(f"[TTS] '{emotion}' -> voice={profile['voice']} speed={profile['speed']}")
 
     try:
         import numpy as np
         import soundfile as sf
-    except ImportError:
-        raise RuntimeError("Run: pip install soundfile numpy")
 
-    try:
-        # Step 1: Kokoro -> temp WAV
         kokoro = _get_kokoro()
-
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
-            tmp_kokoro = f.name
-
         chunks = []
+
         for result in kokoro(text, voice=profile["voice"], speed=profile["speed"]):
-            try:
+            # Handle both old tuple format and new Choice object format
+            if isinstance(result, tuple):
+                audio = result[2]
+            elif hasattr(result, 'audio'):
                 audio = result.audio
-            except AttributeError:
-                try:
-                    audio = result[2]
-                except (TypeError, IndexError):
-                    audio = result
+            else:
+                audio = result
             if audio is not None:
                 chunks.append(audio)
 
         if not chunks:
-            print("[TTS] Kokoro produced no audio.")
+            print("[TTS] No audio generated.")
             return b""
 
-        sf.write(tmp_kokoro, np.concatenate(chunks), KOKORO_SAMPLE_RATE)
+        full_audio = np.concatenate(chunks)
 
-        # Step 2: RVC -> final WAV in your downloaded voice
-        with tempfile.NamedTemporaryFile(suffix=".wav", delete=False) as f:
-            tmp_rvc = f.name
-
-        rvc = _get_rvc()
-        rvc.infer_file(
-            input_path  = tmp_kokoro,
-            output_path = tmp_rvc,
-            f0_up_key   = BASE_PITCH + profile["pitch"],
-            index_rate  = INDEX_RATE,
-            protect     = 0.33,
-        )
-
-        with open(tmp_rvc, "rb") as f:
-            return f.read()
+        # Write to in-memory buffer instead of temp file
+        buf = io.BytesIO()
+        sf.write(buf, full_audio, KOKORO_SAMPLE_RATE, format="WAV")
+        buf.seek(0)
+        return buf.read()
 
     except Exception as e:
         print(f"[TTS] Error: {e}")
         return b""
-
-    finally:
-        for p in (tmp_kokoro, tmp_rvc):
-            if p and os.path.exists(p):
-                try:
-                    os.remove(p)
-                except OSError:
-                    pass
