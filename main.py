@@ -5,7 +5,7 @@ import requests
 import json
 import re
 from pydantic import BaseModel
-from tts_engine import synthesize
+from tts_engine import synthesize, set_reference_clip
 
 from memory_engine import (
     init_memory_db,

@@ -4,45 +4,68 @@
 
 import io
 import re
+import torch
 from pathlib import Path
 
 # ─────────────────────────────────────────────────────────────────────────────
 # CONFIGURE
 # ─────────────────────────────────────────────────────────────────────────────
 
+# Path to your reference audio clip (5-30 seconds of clean voice)
+REFERENCE_CLIP = "aemeath_ref.wav"
+ 
+# Emotion exaggeration level (0.0 to 1.0)
+# 0.0 = flat/monotone
+# 0.5 = natural conversational
+# 0.7 = noticeably expressive  ← recommended
+# 1.0 = very dramatic
+BASE_EXAGGERATION = 0.6
+ 
+# CFG weight — how closely to follow the reference voice (0.0 to 1.0)
+# Higher = more like the reference, lower = more natural variation
+CFG_WEIGHT = 0.5
+
 EMOTION_PROFILES = {
-    "joy":      {"voice": "af_bella", "pitch": +2, "speed": 1.07},
-    "surprise": {"voice": "af_sky",   "pitch": +3, "speed": 1.08},
-    "sadness":  {"voice": "af_sarah", "pitch": -2, "speed": 0.92},
-    "anger":    {"voice": "af_bella", "pitch": +1, "speed": 1.05},
-    "fear":     {"voice": "af_sky",   "pitch": +2, "speed": 1.09},
-    "disgust":  {"voice": "af_sarah", "pitch": -1, "speed": 0.96},
-    "neutral":  {"voice": "af_sky",   "pitch":  0, "speed": 1.00},
+    "joy":      {"exaggeration": 0.75, "cfg": 0.5},
+    "surprise": {"exaggeration": 0.80, "cfg": 0.4},
+    "sadness":  {"exaggeration": 0.45, "cfg": 0.6},
+    "anger":    {"exaggeration": 0.70, "cfg": 0.5},
+    "fear":     {"exaggeration": 0.65, "cfg": 0.4},
+    "disgust":  {"exaggeration": 0.50, "cfg": 0.6},
+    "neutral":  {"exaggeration": 0.60, "cfg": 0.5},
 }
 
-KOKORO_SAMPLE_RATE = 24000
 
 # ─────────────────────────────────────────────────────────────────────────────
 # Singletons
 # ─────────────────────────────────────────────────────────────────────────────
 
-_kokoro     = None
+_model     = None
 _classifier = None
 
 
-def _get_kokoro():
-    global _kokoro
-    if _kokoro is not None:
-        return _kokoro
+def _get_model():
+    global _model
+    if _model is not None:
+        return _model
     try:
-        from kokoro import KPipeline
+        from chatterbox.tts import ChatterboxTTS
     except ImportError:
-        raise RuntimeError("Run: pip install kokoro soundfile")
-    print("[TTS] Loading Kokoro...")
-    _kokoro = KPipeline(lang_code="a")
-    print("[TTS] Kokoro ready")
-    return _kokoro
-
+        raise RuntimeError("Run: pip install chatterbox-tts")
+    
+    ref = Path(REFERENCE_CLIP)
+    if not ref.exists():
+        raise FileNotFoundError(
+            f"\n[TTS] Reference clip not found: {ref}\n"
+            f"      Put your reference audio file there and update REFERENCE_CLIP in tts_engine.py"
+        )
+ 
+    device = "cuda" if torch.cuda.is_available() else "cpu"
+    print(f"[TTS] Loading Chatterbox on {device}...")
+    _model = ChatterboxTTS.from_pretrained(device=device)
+    print("[TTS] Chatterbox ready ✓")
+    return _model
+ 
 
 def _get_classifier():
     global _classifier
@@ -54,7 +77,7 @@ def _get_classifier():
         _classifier = hf_pipeline(
             "text-classification",
             model  = "j-hartmann/emotion-english-distilroberta-base",
-            device = 0,
+            device = 0 if torch.cuda.is_available() else -1,
             top_k  = 1
         )
         print("[TTS] Emotion classifier ready")
@@ -118,44 +141,49 @@ def _clean(text: str) -> str:
 # ─────────────────────────────────────────────────────────────────────────────
 
 def synthesize(text: str) -> bytes:
+    """
+    Full pipeline: text -> emotion -> Chatterbox -> WAV bytes
+    Returns empty bytes on failure so the chat keeps working.
+    """
     text = _clean(text)
     if not text:
         return b""
-
+ 
     emotion = detect_emotion(text)
     profile = EMOTION_PROFILES.get(emotion, EMOTION_PROFILES["neutral"])
-    print(f"[TTS] '{emotion}' -> voice={profile['voice']} speed={profile['speed']}")
-
+ 
+    print(f"[TTS] '{emotion}' -> exaggeration={profile['exaggeration']} cfg={profile['cfg']}")
+ 
     try:
-        import numpy as np
-        import soundfile as sf
-
-        kokoro = _get_kokoro()
-        chunks = []
-
-        for result in kokoro(text, voice=profile["voice"], speed=profile["speed"]):
-            # Handle both old tuple format and new Choice object format
-            if isinstance(result, tuple):
-                audio = result[2]
-            elif hasattr(result, 'audio'):
-                audio = result.audio
-            else:
-                audio = result
-            if audio is not None:
-                chunks.append(audio)
-
-        if not chunks:
-            print("[TTS] No audio generated.")
-            return b""
-
-        full_audio = np.concatenate(chunks)
-
-        # Write to in-memory buffer instead of temp file
+        import torchaudio
+ 
+        model = _get_model()
+ 
+        wav = model.generate(
+            text,
+            audio_prompt_path = REFERENCE_CLIP,
+            exaggeration      = profile["exaggeration"],
+            cfg_weight        = profile["cfg"],
+        )
+ 
+        # Write to in-memory buffer
         buf = io.BytesIO()
-        sf.write(buf, full_audio, KOKORO_SAMPLE_RATE, format="WAV")
+        torchaudio.save(buf, wav, model.sr, format="wav")
         buf.seek(0)
         return buf.read()
-
+ 
     except Exception as e:
         print(f"[TTS] Error: {e}")
         return b""
+ 
+# ─────────────────────────────────────────────────────────────────────────────
+# Voice switching — called from main.py /set-voice endpoint
+# ─────────────────────────────────────────────────────────────────────────────
+ 
+def set_reference_clip(path: str):
+    """Switch to a different voice reference clip without restarting."""
+    global REFERENCE_CLIP
+    if not Path(path).exists():
+        raise FileNotFoundError(f"Reference clip not found: {path}")
+    REFERENCE_CLIP = path
+    print(f"[TTS] Voice switched to: {path}")
