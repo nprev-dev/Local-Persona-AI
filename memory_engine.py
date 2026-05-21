@@ -1,6 +1,3 @@
-# memory_engine.py — OpenJarvis-level memory system
-#
-# Upgrades the original SQLite/FTS5 system with:
 #   Backend 1 — SQLite + FTS5  (persistent, keyword search, zero extra deps)
 #   Backend 2 — BM25           (smarter keyword scoring, in-memory)
 #   Backend 3 — FAISS          (semantic/vector search — finds meaning not just words)
@@ -8,20 +5,9 @@
 #   Chunker                    (splits big text into overlapping pieces)
 #   Document ingestion         (load .txt / .md / code files into memory)
 #
-# Graceful fallback:
 #   faiss-cpu + sentence-transformers + rank-bm25 installed → Hybrid mode (best)
 #   rank-bm25 only                                          → BM25 mode
 #   nothing extra                                           → SQLite/FTS5 mode
-#
-# Public API — same function names as before, plus new additions:
-#   init_memory_db()            call once at startup
-#   add_memory(...)             save an AI-extracted fact
-#   search_memory(query, n)     find relevant memories
-#   get_all_memories()          return all stored facts
-#   clear_all_memories()        wipe everything
-#   ingest_text(text, source)   NEW — chunk + store raw text
-#   ingest_file(path)           NEW — chunk + store a file
-#   memory_count()              NEW — how many entries are stored
 
 import sqlite3
 import uuid
