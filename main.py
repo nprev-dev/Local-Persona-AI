@@ -54,20 +54,16 @@ def strip_thinking(text: str) -> str:
 # _ask_generate uses /api/generate (raw prompt) — used only by the memory judge.
 
 def ask_ollama(messages: list, model: str = CHAT_MODEL, max_tokens: int = 150) -> str:
-    """
-    Send a messages list to Ollama and return the reply string.
-    Uses /api/chat so system messages are passed natively to the model.
-    Strips qwen3 thinking blocks from the output automatically.
-    """
     if model is None:
         model = CURRENT_MODEL
     response = requests.post(
         "http://localhost:11434/api/chat",
         json={
-            "model":   model,
+            "model":    model,
             "messages": messages,
-            "stream":  False,
-            "options": {"num_predict": max_tokens}
+            "stream":   False,
+            "options":  {"num_predict": max_tokens},
+            "keep_alive": 0
         }
     )
     response.raise_for_status()
