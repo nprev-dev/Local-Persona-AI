@@ -151,7 +151,7 @@ def synthesize(text: str) -> bytes:
     
     # Split into sentences for faster chunk generation
     import re as _re
-    sentences = _re.split(r'(?<=[.!?]\s+', text)
+    sentences = _re.split(r'(?<=[.!?])\s+', text)
     sentences = [s.strip() for s in sentences if s.strip()]
     if not sentences:
         return b""
