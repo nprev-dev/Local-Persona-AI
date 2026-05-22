@@ -12,7 +12,7 @@ from pathlib import Path
 # ─────────────────────────────────────────────────────────────────────────────
 
 # Path to your reference audio clip (5-30 seconds of clean voice)
-REFERENCE_CLIP = "aemeath_ref.wav"
+REFERENCE_CLIP = "aemeath_ref.wav" # Modify to sample of your voice
  
 # Emotion exaggeration level (0.0 to 1.0)
 # 0.0 = flat/monotone
@@ -23,7 +23,7 @@ BASE_EXAGGERATION = 0.6
  
 # CFG weight — how closely to follow the reference voice (0.0 to 1.0)
 # Higher = more like the reference, lower = more natural variation
-CFG_WEIGHT = 0.5
+CFG_WEIGHT = 0.7
 
 EMOTION_PROFILES = {
     "joy":      {"exaggeration": 0.75, "cfg": 0.5},
@@ -42,7 +42,7 @@ EMOTION_PROFILES = {
 
 _model     = None
 _classifier = None
-
+_conditioning = None
 
 def _get_model():
     global _model
@@ -51,7 +51,7 @@ def _get_model():
     try:
         from chatterbox.tts import ChatterboxTTS
     except ImportError:
-        raise RuntimeError("Run: pip install chatterbox-tts")
+        raise RuntimeError("Run: pip install chatterbox-tts") # missing dependency
     
     ref = Path(REFERENCE_CLIP)
     if not ref.exists():
@@ -148,6 +148,14 @@ def synthesize(text: str) -> bytes:
     text = _clean(text)
     if not text:
         return b""
+    
+    # Split into sentences for faster chunk generation
+    import re as _re
+    sentences = _re.split(r'(?<=[.!?]\s+', text)
+    sentences = [s.strip() for s in sentences if s.strip()]
+    if not sentences:
+        return b""
+    text = " ".join(sentences[:2]) # Only speak first 2 sentence for speed
  
     emotion = detect_emotion(text)
     profile = EMOTION_PROFILES.get(emotion, EMOTION_PROFILES["neutral"])
@@ -158,10 +166,16 @@ def synthesize(text: str) -> bytes:
         import torchaudio
  
         model = _get_model()
+
+        global _conditioning
+        if _conditioning is None:
+            print("[TTS] Encoding reference clip (one time)...")
+            _conditioning = model.prepare_conditionals(REFERENCE_CLIP)
+            print("[TTS] Reference clip cached")
  
         wav = model.generate(
             text,
-            audio_prompt_path = REFERENCE_CLIP,
+            conditionals      = _conditioning,
             exaggeration      = profile["exaggeration"],
             cfg_weight        = profile["cfg"],
         )
