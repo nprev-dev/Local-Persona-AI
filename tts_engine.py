@@ -42,7 +42,7 @@ EMOTION_PROFILES = {
 
 _model     = None
 _classifier = None
-_conditioning = None
+
 
 def _get_model():
     global _model
@@ -166,16 +166,10 @@ def synthesize(text: str) -> bytes:
         import torchaudio
  
         model = _get_model()
-
-        global _conditioning
-        if _conditioning is None:
-            print("[TTS] Encoding reference clip (one time)...")
-            _conditioning = model.prepare_conditionals(REFERENCE_CLIP)
-            print("[TTS] Reference clip cached")
  
         wav = model.generate(
             text,
-            conditionals      = _conditioning,
+            audio_prompt_path = REFERENCE_CLIP,
             exaggeration      = profile["exaggeration"],
             cfg_weight        = profile["cfg"],
         )
