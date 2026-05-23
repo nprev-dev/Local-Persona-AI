@@ -154,8 +154,10 @@ def synthesize(text: str) -> bytes:
     sentences = _re.split(r'(?<=[.!?])\s+', text)
     sentences = [s.strip() for s in sentences if s.strip()]
     if not sentences:
-        return b""
-    text = " ".join(sentences[:2]) # Only speak first 2 sentence for speed
+        sentences = [text]
+    text = " ".join(sentences[:3]) #Only speak first 3 sentence for speed
+    if len(text) < 20:
+        text = " ".join(sentences)
  
     emotion = detect_emotion(text)
     profile = EMOTION_PROFILES.get(emotion, EMOTION_PROFILES["neutral"])
