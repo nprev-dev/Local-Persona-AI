@@ -166,19 +166,30 @@ def synthesize(text: str) -> bytes:
  
     try:
         import torchaudio
- 
+        import torch
+
         model = _get_model()
+
+        audio_chunks = []
+        for sentence in sentences:
+            if not sentence.strip():
+                continue
  
-        wav = model.generate(
-            text,
-            audio_prompt_path = REFERENCE_CLIP,
-            exaggeration      = profile["exaggeration"],
-            cfg_weight        = profile["cfg"],
-        )
- 
-        # Write to in-memory buffer
+            wav = model.generate(
+                sentence,
+                audio_prompt_path = REFERENCE_CLIP,
+                exaggeration      = profile["exaggeration"],
+                cfg_weight        = profile["cfg"],
+            )
+            audio_chunks.append(wav)
+
+        if not audio_chunks:
+            return b""
+        
+        full_wav = torch.cat(audio_chunks, dim=-1)
+
         buf = io.BytesIO()
-        torchaudio.save(buf, wav, model.sr, format="wav")
+        torchaudio.save(buf, full_wav, model.sr, format="wav")
         buf.seek(0)
         return buf.read()
  
