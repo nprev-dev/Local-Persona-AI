@@ -1,11 +1,11 @@
 from fastapi import FastAPI, UploadFile, File
-from fastapi.responses import HTMLResponse, Response
+from fastapi.responses import HTMLResponse, Response, StreamingResponse
 from openai import OpenAI
 import requests
 import json
 import re
 from pydantic import BaseModel
-from tts_engine import synthesize, set_reference_clip
+from tts_engine import synthesize, synthesize_sentence, set_reference_clip
 
 from memory_engine import (
     init_memory_db,
@@ -70,6 +70,34 @@ def ask_ollama(messages: list, model: str = CHAT_MODEL, max_tokens: int = 150) -
     raw = response.json()["message"]["content"]
     return strip_thinking(raw)
 
+def ask_ollama_stream(messages: list, model: str = CHAT_MODEL, max_tokens: int = 150):
+    """Generator that yields tokens as they stream from Ollama."""
+    if model is None:
+        model = CURRENT_MODEL
+    response = requests.post(
+        "http://localhost:11434/api/chat",
+        json={
+            "model":      model,
+            "messages":   messages,
+            "stream":     True,
+            "options":    {"num_predict": max_tokens},
+            "keep_alive": 0
+        },
+        stream=True
+    )
+    response.raise_for_status()
+    for line in response.iter_lines():
+        if not line:
+            continue
+        try:
+            data = json.loads(line)
+            token = data.get("message", {}).get("content", "")
+            if token:
+                yield token
+            if data.get("done"):
+                break
+        except json.JSONDecodeError:
+            continue
 
 def _ask_generate(prompt: str, model: str = MEMORY_MODEL, max_tokens: int = 180) -> str:
     """
@@ -390,11 +418,22 @@ class SpeakRequest(BaseModel):
 
 @app.post("/speak")
 async def speak(data: SpeakRequest):
-    audio_bytes = synthesize(data.text)
-    if not audio_bytes:
-        return Response(status_code=204)
-    return Response(
-        content    = audio_bytes,
-        media_type = "audio/wav",
-        headers    = {"Cache-Control": "no-store"}
-    )
+    import asyncio
+
+    async def audio_stream():
+        sentences = __import__('re').split(r'(?<=[.!?])\s+', data.text.strip())
+        sentences = [s.strip() for s in sentences if len(s.strip()) > 5]
+        if not sentences:
+            sentences = [data.text.strip()]
+
+        for sentence in sentences:
+            audio_bytes = await asyncio.get_event_loop().run_in_executor(
+                None, synthesize_sentence, sentence
+            )
+            if audio_bytes:
+                # Send length prefix so browser knows where each chunk ends
+                length = len(audio_bytes).to_bytes(4, 'big')
+                yield length + audio_bytes
+
+    return StreamingResponse(audio_stream(), media_type="audio/octet-stream")
+    
