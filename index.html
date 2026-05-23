@@ -339,36 +339,58 @@ async function send() {
   add(text, "user");
   input.value = "";
 
-  const loading = document.createElement("div");
-  loading.className = "msg ai";
-  loading.textContent = "Thinking...";
-  chat.appendChild(loading);
+  const div = document.createElement("div");
+  div.className = "msg ai";
+  div.textContent = "";
+  chat.appendChild(div);
+  chat.scrollTop = chat.scrollHeight;
+
+  let fullReply = "";
 
   try {
-    const res  = await fetch("/chat", {
-      method:  "POST",
+    const res = await fetch("/chat", {
+      method: "POST",
       headers: { "Content-Type": "application/json" },
-      body:    JSON.stringify({ user_input: text })
+      body: JSON.stringify({ user_input: text })
     });
 
-    const data = await res.json();
+    const reader  = res.body.getReader();
+    const decoder = new TextDecoder();
 
-    loading.remove();
-    addAIMessage(data.response); // was: add(data.response, "ai");
-    mode.textContent = "Mode: " + data.mode;
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
 
-    if (data.memory_saved) {
-      showMemorySaved();
+      const lines = decoder.decode(value).split("\n").filter(Boolean);
+      for (const line of lines) {
+        try {
+          const data = JSON.parse(line);
+          if (data.token) {
+            fullReply += data.token;
+            div.textContent = fullReply;
+            chat.scrollTop = chat.scrollHeight;
+          }
+          if (data.done) {
+            mode.textContent = "Mode: LOCAL MODE";
+            if (data.memory_saved) showMemorySaved();
+            if (data.memory_count) updateStats(data.memory_count);
+            addAIAudio(div, fullReply);
+          }
+        } catch (_) {}
+      }
     }
-
-    if (data.memory_count) {
-      updateStats(data.memory_count);
-    }
-
   } catch (e) {
-    loading.remove();
-    add("Error contacting server", "ai");
+    div.textContent = "Error contacting server.";
   }
+}
+
+async function addAIAudio(div, text) {
+  const audio = document.createElement("audio");
+  audio.className = "msg-audio";
+  audio.controls = true;
+  audio.style.display = "none";
+  div.appendChild(audio);
+  await loadAudio(text, audio);
 }
 
 function showMemorySaved() {
