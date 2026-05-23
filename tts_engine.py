@@ -208,3 +208,36 @@ def set_reference_clip(path: str):
         raise FileNotFoundError(f"Reference clip not found: {path}")
     REFERENCE_CLIP = path
     print(f"[TTS] Voice switched to: {path}")
+
+# ─────────────────────────────────────────────────────────────────────────────
+# Generate audio sentence by sentence
+# ─────────────────────────────────────────────────────────────────────────────
+
+def synthesize_sentence(text: str) -> bytes:
+    """Generate audio for a single sentence."""
+    text = _clean(text)
+    if not text:
+        return b""
+
+    emotion = detect_emotion(text)
+    profile = EMOTION_PROFILES.get(emotion, EMOTION_PROFILES["neutral"])
+
+    try:
+        import torchaudio
+        import torch
+
+        model = _get_model()
+        wav = model.generate(
+            text,
+            audio_prompt_path = REFERENCE_CLIP,
+            exaggeration      = profile["exaggeration"],
+            cfg_weight        = profile["cfg"],
+        )
+        buf = io.BytesIO()
+        torchaudio.save(buf, wav, model.sr, format="wav")
+        buf.seek(0)
+        return buf.read()
+
+    except Exception as e:
+        print(f"[TTS] Error: {e}")
+        return b""
