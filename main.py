@@ -271,56 +271,41 @@ async def chat(data: ChatRequest):
 
     chat_memory       = load_chat_memory()
     relevant_memories = search_memory(user_input, limit=6)
+    messages          = build_chat_messages(user_input, chat_memory, relevant_memories)
 
-    if USE_OPENAI:
-        messages = [
-            {
-                "role": "system",
-                "content": (
-                    "You are a personal AI assistant. "
-                    "Use relevant long-term memories naturally.\n\n"
-                    f"{memories_to_text(relevant_memories)}"
-                )
-            }
-        ] + chat_memory[-10:] + [
-            {"role": "user", "content": user_input}
-        ]
+    async def response_stream():
+        full_reply = ""
 
-        reply = ask_openai(messages)
-        mode  = "SMART MODE"
-    else:
-        messages = build_chat_messages(user_input, chat_memory, relevant_memories)
-        reply    = ask_ollama(messages, model=CURRENT_MODEL)
-        mode     = "LOCAL MODE"
+        for token in ask_ollama_stream(messages, model=CURRENT_MODEL):
+            full_reply += token
+            yield json.dumps({"token": token}) + "\n"
 
-    chat_memory.append({"role": "user",      "content": user_input})
-    chat_memory.append({"role": "assistant", "content": reply})
+        # Save chat history
+        chat_memory.append({"role": "user",      "content": user_input})
+        chat_memory.append({"role": "assistant", "content": full_reply})
+        if len(chat_memory) > 60:
+            chat_memory[-60:]
+        save_chat_memory(chat_memory)
 
-    if len(chat_memory) > 60:
-        chat_memory = chat_memory[-60:]
+        # Save memory
+        new_memory   = extract_memory(user_input, full_reply)
+        memory_saved = False
+        if new_memory:
+            memory_saved = add_memory(
+                category   = new_memory["category"],
+                content    = new_memory["content"],
+                importance = new_memory["importance"],
+                source     = "chat"
+            )
 
-    save_chat_memory(chat_memory)
+        counts = memory_count()
+        yield json.dumps({
+            "done":         True,
+            "memory_saved": memory_saved,
+            "memory_count": counts
+        }) + "\n"
 
-    new_memory    = extract_memory(user_input, reply)
-    memory_saved  = False
-
-    if new_memory:
-        memory_saved = add_memory(
-            category   = new_memory["category"],
-            content    = new_memory["content"],
-            importance = new_memory["importance"],
-            source     = "chat"
-        )
-
-    counts = memory_count()
-
-    return {
-        "response":     reply,
-        "mode":         mode,
-        "memory_saved": memory_saved,
-        "memory_count": counts
-    }
-
+    return StreamingResponse(response_stream(), media_type="application/x-ndjson")
 
 @app.post("/ingest")
 async def ingest(data: IngestRequest):
