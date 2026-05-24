@@ -402,23 +402,14 @@ class SpeakRequest(BaseModel):
     text: str
 
 @app.post("/speak")
+@app.post("/speak")
 async def speak(data: SpeakRequest):
-    import asyncio
-
-    async def audio_stream():
-        sentences = __import__('re').split(r'(?<=[.!?])\s+', data.text.strip())
-        sentences = [s.strip() for s in sentences if len(s.strip()) > 5]
-        if not sentences:
-            sentences = [data.text.strip()]
-
-        for sentence in sentences:
-            audio_bytes = await asyncio.get_event_loop().run_in_executor(
-                None, synthesize_sentence, sentence
-            )
-            if audio_bytes:
-                # Send length prefix so browser knows where each chunk ends
-                length = len(audio_bytes).to_bytes(4, 'big')
-                yield length + audio_bytes
-
-    return StreamingResponse(audio_stream(), media_type="audio/octet-stream")
+    audio_bytes = synthesize(data.text)
+    if not audio_bytes:
+        return Response(status_code=204)
+    return Response(
+        content    = audio_bytes,
+        media_type = "audio/wav",
+        headers    = {"Cache-Control": "no-store"}
+    )
     
