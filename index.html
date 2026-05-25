@@ -521,12 +521,79 @@ async function loadAudio(text, audioEl) {
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify({ text })
     });
+
     if (res.status === 204) return;
-    const blob = await res.blob();
-    audioEl.src = URL.createObjectURL(blob);
+
+    const reader  = res.body.getReader();
+    const ctx     = new AudioContext();
+    const queue   = [];
+    let   playing = false;
+    let   nextStart = 0;
+
+    async function playNext() {
+      if (queue.length === 0) {
+        playing = false;
+        return;
+      }
+      playing = true;
+      const audioBuffer = queue.shift();
+      const source = ctx.createBufferSource();
+      source.buffer = audioBuffer;
+      source.connect(ctx.destination);
+
+      const when = Math.max(ctx.currentTime, nextStart);
+      source.start(when);
+      nextStart = when + audioBuffer.duration;
+
+      source.onended = playNext;
+    }
+
+    // Read and decode chunks as they arrive
+    let leftover = new Uint8Array(0);
+
+    while (true) {
+      const { done, value } = await reader.read();
+      if (done) break;
+
+      // Append new data to leftover
+      const combined = new Uint8Array(leftover.length + value.length);
+      combined.set(leftover);
+      combined.set(value, leftover.length);
+      leftover = combined;
+
+      // Process all complete chunks in the buffer
+      while (leftover.length >= 4) {
+        // Read 4-byte length prefix
+        const length = (leftover[0] << 24) | (leftover[1] << 16) |
+                       (leftover[2] << 8)  |  leftover[3];
+
+        if (leftover.length < 4 + length) break; // wait for more data
+
+        // Extract the WAV chunk
+        const wavBytes = leftover.slice(4, 4 + length);
+        leftover = leftover.slice(4 + length);
+
+        // Decode and queue
+        try {
+          const audioBuffer = await ctx.decodeAudioData(wavBytes.buffer.slice(
+            wavBytes.byteOffset, wavBytes.byteOffset + wavBytes.byteLength
+          ));
+          queue.push(audioBuffer);
+          if (!playing) playNext();
+        } catch (e) {
+          console.warn("[TTS] Decode error:", e);
+        }
+      }
+    }
+
+    // Show the audio element as a replay button
     audioEl.style.display = "block";
-    if (document.getElementById("autoPlayToggle").checked) playAudio(audioEl);
-  } catch (e) { console.warn("[TTS]", e); }
+    const indicator = document.getElementById("speakingIndicator");
+    indicator.style.display = "none";
+
+  } catch (e) {
+    console.warn("[TTS] Audio stream error:", e);
+  }
 }
 
 function playAudio(audioEl) {
