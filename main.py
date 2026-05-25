@@ -410,7 +410,7 @@ async def speak(data: SpeakRequest):
     if not text:
         return Response(status_code=204)
 
-    sentences = _re.split(r'(?<=[.!?])\s+', text)
+    sentences = _re.split(r'(?<=[.!?])\s+(?=[A-Z])', text)
     sentences = [s.strip() for s in sentences if len(s.strip()) > 5]
     if not sentences:
         sentences = [text]
