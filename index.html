@@ -545,7 +545,12 @@ async function loadAudio(text, audioEl) {
       source.start(when);
       nextStart = when + audioBuffer.duration;
 
-      source.onended = playNext;
+      source.onended = () => {
+        if (queue.length === 0) {
+          document.getElementById("speakingIndicator").style.display = "none";
+        }
+        playNext();
+      };
     }
 
     // Read and decode chunks as they arrive
@@ -579,7 +584,10 @@ async function loadAudio(text, audioEl) {
             wavBytes.byteOffset, wavBytes.byteOffset + wavBytes.byteLength
           ));
           queue.push(audioBuffer);
-          if (!playing) playNext();
+          if (!playing) {
+          document.getElementById("speakingIndicator").style.display = "inline";
+          playNext();
+        }
         } catch (e) {
           console.warn("[TTS] Decode error:", e);
         }
