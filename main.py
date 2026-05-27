@@ -99,6 +99,17 @@ def ask_ollama_stream(messages: list, model: str = CHAT_MODEL, max_tokens: int =
         except json.JSONDecodeError:
             continue
 
+def unload_ollama():
+    """Force Ollama to release VRAM after responding."""
+    try:
+        requests.post(
+            "http://localhost:11434/api/generate",
+            json={"model": CURRENT_MODEL, "keep_alive": 0, "prompt": ""},
+            timeout=5
+        )
+    except Exception:
+        pass
+
 def _ask_generate(prompt: str, model: str = MEMORY_MODEL, max_tokens: int = 180) -> str:
     """
     Raw prompt → response via /api/generate.
@@ -286,6 +297,7 @@ async def chat(data: ChatRequest):
         if len(chat_memory) > 60:
             chat_memory[-60:]
         save_chat_memory(chat_memory)
+        unload_ollama()
 
         # Save memory
         new_memory   = extract_memory(user_input, full_reply)
