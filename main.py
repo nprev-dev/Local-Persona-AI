@@ -430,12 +430,16 @@ async def speak(data: SpeakRequest):
     async def stream_sentences():
         loop = asyncio.get_event_loop()
         for sentence in sentences:
+            print(f"[TTS] Generating sentence: {sentence[:50]}")
             audio_bytes = await loop.run_in_executor(
                 None, synthesize_sentence, sentence
             )
             if audio_bytes:
+                print(f"[TTS] Sending {len(audio_bytes)} bytes")
                 length = len(audio_bytes).to_bytes(4, 'big')
                 yield length + audio_bytes
+            else:
+                print(f"[TTS] No audio for sentence")
 
     return StreamingResponse(stream_sentences(), media_type="audio/octet-stream")
     
