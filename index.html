@@ -594,10 +594,23 @@ async function loadAudio(text, audioEl) {
       }
     }
 
-    // Show the audio element as a replay button
+    // Make the audio element work as a replay button
+    // Collect all audio chunks into one blob for replay
+    const allChunks = [];
+    // Re-read already decoded buffers isn't possible with AudioContext
+    // so we wire up a click handler to replay via AudioContext instead
     audioEl.style.display = "block";
-    const indicator = document.getElementById("speakingIndicator");
-    indicator.style.display = "none";
+    audioEl.controls = false;
+
+    // Create a simple replay button instead
+    const replayBtn = document.createElement("button");
+    replayBtn.textContent = "🔁 Replay";
+    replayBtn.style.cssText = "margin-top:4px;padding:3px 10px;background:#1e2330;color:white;border:1px solid #333;border-radius:6px;cursor:pointer;font-size:12px;";
+    audioEl.parentElement.appendChild(replayBtn);
+
+    replayBtn.onclick = async () => {
+      await loadAudio(text, document.createElement("audio"));
+    };
 
   } catch (e) {
     console.warn("[TTS] Audio stream error:", e);
