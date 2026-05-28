@@ -596,9 +596,6 @@ async function loadAudio(text, audioEl) {
 
     // Make the audio element work as a replay button
     // Collect all audio chunks into one blob for replay
-    const allChunks = [];
-    // Re-read already decoded buffers isn't possible with AudioContext
-    // so we wire up a click handler to replay via AudioContext instead
     audioEl.style.display = "block";
     audioEl.controls = false;
 
@@ -606,7 +603,10 @@ async function loadAudio(text, audioEl) {
     const replayBtn = document.createElement("button");
     replayBtn.textContent = "🔁 Replay";
     replayBtn.style.cssText = "margin-top:4px;padding:3px 10px;background:#1e2330;color:white;border:1px solid #333;border-radius:6px;cursor:pointer;font-size:12px;";
-    audioEl.parentElement.appendChild(replayBtn);
+    const btnWrapper = document.createElement("div");
+    btnWrapper.style.cssText = "margin-top:6px;";
+    btnWrapper.appendChild(replayBtn);
+    audioEl.parentElement.appendChild(btnWrapper);
 
     replayBtn.onclick = async () => {
       await loadAudio(text, document.createElement("audio"));
