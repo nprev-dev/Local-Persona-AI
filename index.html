@@ -524,15 +524,17 @@ async function loadAudio(text, audioEl) {
 
     if (res.status === 204) return;
 
-    const reader  = res.body.getReader();
-    const ctx     = new AudioContext();
-    const queue   = [];
-    let   playing = false;
+    const reader    = res.body.getReader();
+    const ctx       = new AudioContext();
+    const queue     = [];
+    let   playing   = false;
     let   nextStart = 0;
+    const allWavChunks = []; // collect all chunks for the player bar
 
     async function playNext() {
       if (queue.length === 0) {
         playing = false;
+        document.getElementById("speakingIndicator").style.display = "none";
         return;
       }
       playing = true;
@@ -540,77 +542,71 @@ async function loadAudio(text, audioEl) {
       const source = ctx.createBufferSource();
       source.buffer = audioBuffer;
       source.connect(ctx.destination);
-
       const when = Math.max(ctx.currentTime, nextStart);
       source.start(when);
       nextStart = when + audioBuffer.duration;
-
-      source.onended = () => {
-        if (queue.length === 0) {
-          document.getElementById("speakingIndicator").style.display = "none";
-        }
-        playNext();
-      };
+      source.onended = playNext;
     }
 
-    // Read and decode chunks as they arrive
     let leftover = new Uint8Array(0);
 
     while (true) {
       const { done, value } = await reader.read();
       if (done) break;
 
-      // Append new data to leftover
       const combined = new Uint8Array(leftover.length + value.length);
       combined.set(leftover);
       combined.set(value, leftover.length);
       leftover = combined;
 
-      // Process all complete chunks in the buffer
       while (leftover.length >= 4) {
-        // Read 4-byte length prefix
         const length = (leftover[0] << 24) | (leftover[1] << 16) |
                        (leftover[2] << 8)  |  leftover[3];
 
-        if (leftover.length < 4 + length) break; // wait for more data
+        if (leftover.length < 4 + length) break;
 
-        // Extract the WAV chunk
         const wavBytes = leftover.slice(4, 4 + length);
         leftover = leftover.slice(4 + length);
 
-        // Decode and queue
+        // Save raw bytes for player bar
+        allWavChunks.push(wavBytes);
+
         try {
           const audioBuffer = await ctx.decodeAudioData(wavBytes.buffer.slice(
             wavBytes.byteOffset, wavBytes.byteOffset + wavBytes.byteLength
           ));
           queue.push(audioBuffer);
           if (!playing) {
-          document.getElementById("speakingIndicator").style.display = "inline";
-          playNext();
-        }
+            document.getElementById("speakingIndicator").style.display = "inline";
+            playNext();
+          }
         } catch (e) {
           console.warn("[TTS] Decode error:", e);
         }
       }
     }
 
-    // Make the audio element work as a replay button
-    // Collect all audio chunks into one blob for replay
-    audioEl.style.display = "block";
-    audioEl.controls = false;
+    // All chunks received — stitch into one blob for the player bar
+    if (allWavChunks.length > 0) {
+      const totalLength = allWavChunks.reduce((sum, c) => sum + c.length, 0);
+      const merged = new Uint8Array(totalLength);
+      let offset = 0;
+      for (const chunk of allWavChunks) {
+        merged.set(chunk, offset);
+        offset += chunk.length;
+      }
+      const blob = new Blob([merged], { type: "audio/wav" });
+      const url  = URL.createObjectURL(blob);
 
-    // Create a simple replay button instead
-    const replayBtn = document.createElement("button");
-    replayBtn.textContent = "🔁 Replay";
-    replayBtn.style.cssText = "margin-top:4px;padding:3px 10px;background:#1e2330;color:white;border:1px solid #333;border-radius:6px;cursor:pointer;font-size:12px;";
-    const btnWrapper = document.createElement("div");
-    btnWrapper.style.cssText = "margin-top:6px;";
-    btnWrapper.appendChild(replayBtn);
-    audioEl.parentElement.appendChild(btnWrapper);
+      // Wire up the audio element as a proper player
+      audioEl.src      = url;
+      audioEl.controls = true;
+      audioEl.style.display = "block";
 
-    replayBtn.onclick = async () => {
-      await loadAudio(text, document.createElement("audio"));
-    };
+      audioEl.onended = () => {
+        URL.revokeObjectURL(url);
+      };
+    }
 
   } catch (e) {
     console.warn("[TTS] Audio stream error:", e);

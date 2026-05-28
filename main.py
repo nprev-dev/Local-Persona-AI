@@ -42,7 +42,7 @@ class IngestRequest(BaseModel):
 
 
 # ── Thinking tag stripper ──────────────────────────────────────────────────────
-# qwen3 outputs <think>...</think> blocks before its reply.
+# outputs <think>...</think> blocks before its reply.
 # We strip these so users only see the actual response.
 def strip_thinking(text: str) -> str:
     cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
