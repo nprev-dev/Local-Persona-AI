@@ -20,6 +20,28 @@ from memory_engine import (
 
 app = FastAPI()
 
+def load_personality() -> str:
+    try:
+        with open("personality.json", "r", encoding="utf-8") as f:
+            p = json.load(f)
+        prompt = p.get("base_prompt", "You are a helpful AI assistant.")
+        traits = p.get("traits", [])
+        if traits:
+            prompt += "\n\nYour personality traits:\n" + "\n".join(f"- {t}" for t in traits)
+        style = p.get("speech_style", [])
+        if style:
+            prompt += "\n\nHow you speak:\n" + "\n".join(f"- {s}" for s in style)
+        rules = p.get("hard_rules", [])
+        if rules:
+            prompt += "\n\nRules you always follow:\n" + "\n".join(f"- {r}" for r in rules)
+        return prompt
+    except Exception as e:
+        print(f"[Personality] Could not load personality.json: {e}")
+        return "You are a helpful AI assistant."
+
+PERSONALITY_PROMPT = load_personality()
+print("[Personality] Loaded successfully")
+
 init_memory_db()
 
 CHAT_MODEL   = "qwen2.5:7b"
@@ -137,10 +159,9 @@ def build_chat_messages(user_input: str, recent_chat: list, relevant_memories: l
     Recent chat history is passed as alternating user/assistant turns.
     """
     system_content = (
-        "You are a personal local AI assistant.\n\n"
+        f"{PERSONALITY_PROMPT}\n\n"
         "Use the long-term memories only when relevant. "
-        "Do not dump memories unless the user asks. "
-        "Be natural, helpful, and consistent.\n\n"
+        "Do not dump memories unless the user asks.\n\n"
         "RELEVANT LONG-TERM MEMORIES:\n"
         f"{memories_to_text(relevant_memories)}"
     )
@@ -343,27 +364,15 @@ async def get_memory_count():
 
 @app.get("/settings")
 async def get_settings():
-    return {
-        "model":       CURRENT_MODEL,
-        "personality": CURRENT_PERSONALITY
-    }
+    return {"model": CURRENT_MODEL}
 
 
 @app.post("/settings")
 async def update_settings(settings: dict):
-    global CURRENT_MODEL, CURRENT_PERSONALITY
-
+    global CURRENT_MODEL
     if "model" in settings:
         CURRENT_MODEL = settings["model"]
-
-    if "personality" in settings:
-        CURRENT_PERSONALITY = settings["personality"]
-
-    return {
-        "status":      "ok",
-        "model":       CURRENT_MODEL,
-        "personality": CURRENT_PERSONALITY
-    }
+    return {"status": "ok", "model": CURRENT_MODEL}
 
 
 @app.post("/clear-memory")
