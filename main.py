@@ -22,15 +22,10 @@ app = FastAPI()
 
 init_memory_db()
 
-client = None #OpenAI()
-
-USE_OPENAI = False
-
 CHAT_MODEL   = "qwen2.5:7b"
 MEMORY_MODEL = "phi3"
 
 CURRENT_MODEL       = "qwen2.5:7b"
-CURRENT_PERSONALITY = "default"
 
 
 class ChatRequest(BaseModel):
@@ -127,15 +122,6 @@ def _ask_generate(prompt: str, model: str = MEMORY_MODEL, max_tokens: int = 180)
     response.raise_for_status()
     raw = response.json()["response"]
     return strip_thinking(raw)
-
-
-def ask_openai(messages: list) -> str:
-    response = client.chat.completions.create(
-        model="gpt-4.1-mini",
-        messages=messages
-    )
-    return response.choices[0].message.content
-
 
 # ── Chat history ───────────────────────────────────────────────────────────────
 
