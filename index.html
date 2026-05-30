@@ -529,7 +529,7 @@ async function loadAudio(text, audioEl) {
     const queue     = [];
     let   playing   = false;
     let   nextStart = 0;
-    const allWavChunks = []; // collect all chunks for the player bar
+    const allAudioBuffers = []; // collect all decoded buffers for player bar
 
     async function playNext() {
       if (queue.length === 0) {
@@ -568,14 +568,12 @@ async function loadAudio(text, audioEl) {
         const wavBytes = leftover.slice(4, 4 + length);
         leftover = leftover.slice(4 + length);
 
-        // Save raw bytes for player bar
-        allWavChunks.push(wavBytes);
-
         try {
           const audioBuffer = await ctx.decodeAudioData(wavBytes.buffer.slice(
-            wavBytes.byteOffset, wavBytes.byteOffset + wavBytes.byteLength
+          wavBytes.byteOffset, wavBytes.byteOffset + wavBytes.byteLength
           ));
           queue.push(audioBuffer);
+          allAudioBuffers.push(audioBuffer); // save for player bar
           if (!playing) {
             document.getElementById("speakingIndicator").style.display = "inline";
             playNext();
@@ -586,28 +584,30 @@ async function loadAudio(text, audioEl) {
       }
     }
 
-    // All chunks received — stitch into one blob for the player bar
-    if (allWavChunks.length > 0) {
-      const totalLength = allWavChunks.reduce((sum, c) => sum + c.length, 0);
-      const merged = new Uint8Array(totalLength);
+    // All chunks received — merge PCM and encode as one WAV for player bar
+    if (allAudioBuffers.length > 0) {
+      const sampleRate  = allAudioBuffers[0].sampleRate;
+      const numChannels = allAudioBuffers[0].numberOfChannels;
+      const totalFrames = allAudioBuffers.reduce((sum, b) => sum + b.length, 0);
+
+      // Merge all PCM data
+      const merged = ctx.createBuffer(numChannels, totalFrames, sampleRate);
       let offset = 0;
-      for (const chunk of allWavChunks) {
-        merged.set(chunk, offset);
-        offset += chunk.length;
+      for (const buf of allAudioBuffers) {
+        for (let ch = 0; ch < numChannels; ch++) {
+          merged.getChannelData(ch).set(buf.getChannelData(ch), offset);
+        }
+        offset += buf.length;
       }
-      const blob = new Blob([merged], { type: "audio/wav" });
-      const url  = URL.createObjectURL(blob);
 
-      // Wire up the audio element as a proper player
-      audioEl.src      = url;
-      audioEl.controls = true;
-      audioEl.style.display = "block";
-
-      audioEl.onended = () => {
-        URL.revokeObjectURL(url);
-      };
-    }
-
+  // Encode merged buffer to WAV
+  const wavBlob = audioBufferToWav(merged);
+  const url = URL.createObjectURL(wavBlob);
+  audioEl.src = url;
+  audioEl.controls = true;
+  audioEl.style.display = "block";
+  audioEl.onended = () => URL.revokeObjectURL(url);
+}
   } catch (e) {
     console.warn("[TTS] Audio stream error:", e);
   }
@@ -631,6 +631,45 @@ autoPlayToggle.checked = localStorage.getItem("ttsAutoPlay") !== "false";
 autoPlayToggle.addEventListener("change", () => {
   localStorage.setItem("ttsAutoPlay", autoPlayToggle.checked);
 });
+
+function audioBufferToWav(buffer) {
+  const numChannels = buffer.numberOfChannels;
+  const sampleRate  = buffer.sampleRate;
+  const numFrames   = buffer.length;
+  const bytesPerSample = 2;
+  const dataSize    = numFrames * numChannels * bytesPerSample;
+  const arrayBuffer = new ArrayBuffer(44 + dataSize);
+  const view        = new DataView(arrayBuffer);
+
+  // WAV header
+  const writeStr = (offset, str) => { for (let i = 0; i < str.length; i++) view.setUint8(offset + i, str.charCodeAt(i)); };
+  writeStr(0, 'RIFF');
+  view.setUint32(4, 36 + dataSize, true);
+  writeStr(8, 'WAVE');
+  writeStr(12, 'fmt ');
+  view.setUint32(16, 16, true);
+  view.setUint16(20, 1, true);
+  view.setUint16(22, numChannels, true);
+  view.setUint32(24, sampleRate, true);
+  view.setUint32(28, sampleRate * numChannels * bytesPerSample, true);
+  view.setUint16(32, numChannels * bytesPerSample, true);
+  view.setUint16(34, 16, true);
+  writeStr(36, 'data');
+  view.setUint32(40, dataSize, true);
+
+  // PCM data
+  let offset = 44;
+  for (let i = 0; i < numFrames; i++) {
+    for (let ch = 0; ch < numChannels; ch++) {
+      const sample = Math.max(-1, Math.min(1, buffer.getChannelData(ch)[i]));
+      view.setInt16(offset, sample < 0 ? sample * 32768 : sample * 32767, true);
+      offset += 2;
+    }
+  }
+
+  return new Blob([arrayBuffer], { type: 'audio/wav' });
+}
+
 </script>
 
 </body>
