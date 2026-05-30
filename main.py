@@ -45,25 +45,6 @@ def strip_thinking(text: str) -> str:
 
 
 # ── Ollama API helpers ─────────────────────────────────────────────────────────
-# ask_ollama uses /api/chat (messages array) — supports proper system messages.
-# _ask_generate uses /api/generate (raw prompt) — used only by the memory judge.
-
-def ask_ollama(messages: list, model: str = CHAT_MODEL, max_tokens: int = 150) -> str:
-    if model is None:
-        model = CURRENT_MODEL
-    response = requests.post(
-        "http://localhost:11434/api/chat",
-        json={
-            "model":    model,
-            "messages": messages,
-            "stream":   False,
-            "options":  {"num_predict": max_tokens},
-            "keep_alive": 0
-        }
-    )
-    response.raise_for_status()
-    raw = response.json()["message"]["content"]
-    return strip_thinking(raw)
 
 def ask_ollama_stream(messages: list, model: str = CHAT_MODEL, max_tokens: int = 150):
     """Generator that yields tokens as they stream from Ollama."""
