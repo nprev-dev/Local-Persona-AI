@@ -282,9 +282,13 @@
   </div>
 
   <label class="tts-toggle">
-      <input type="checkbox" id="autoPlayToggle" checked>
-      Autoplay voice
-    </label>
+    <input type="checkbox" id="ttsToggle" checked>
+    Voice enabled
+  </label>
+  <label class="tts-toggle">
+    <input type="checkbox" id="autoPlayToggle" checked>
+    Auto-play
+  </label>
 
 </div>
 
@@ -313,7 +317,8 @@
 const chat  = document.getElementById("chat");
 const input = document.getElementById("input");
 const mode  = document.getElementById("mode");
-
+let ttsPlaying = false;
+let ttsPending = null;
 // ── Chat ──────────────────────────────────────────────────────
 
 function add(text, type, tag = "") {
@@ -385,12 +390,30 @@ async function send() {
 }
 
 async function addAIAudio(div, text) {
+  if (!document.getElementById("ttsToggle").checked) return;
+
   const audio = document.createElement("audio");
   audio.className = "msg-audio";
   audio.controls = true;
   audio.style.display = "none";
   div.appendChild(audio);
+
+  if (ttsPlaying) {
+    // Queue this one, cancel previous pending
+    ttsPending = { div, text, audio };
+    return;
+  }
+
+  ttsPlaying = true;
   await loadAudio(text, audio);
+  ttsPlaying = false;
+
+  // Play pending if one queued up
+  if (ttsPending) {
+    const next = ttsPending;
+    ttsPending = null;
+    await addAIAudio(next.div, next.text);
+  }
 }
 
 function showMemorySaved() {
@@ -630,6 +653,11 @@ const autoPlayToggle = document.getElementById("autoPlayToggle");
 autoPlayToggle.checked = localStorage.getItem("ttsAutoPlay") !== "false";
 autoPlayToggle.addEventListener("change", () => {
   localStorage.setItem("ttsAutoPlay", autoPlayToggle.checked);
+});
+const ttsToggle = document.getElementById("ttsToggle");
+ttsToggle.checked = localStorage.getItem("ttsEnabled") !== "false";
+ttsToggle.addEventListener("change", () => {
+  localStorage.setItem("ttsEnabled", ttsToggle.checked);
 });
 
 function audioBufferToWav(buffer) {
