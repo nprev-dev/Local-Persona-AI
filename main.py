@@ -66,6 +66,21 @@ class IngestRequest(BaseModel):
 # We strip these so users only see the actual response.
 def strip_thinking(text: str) -> str:
     cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
+    cleaned = re.sub(
+        u'[\U0001F600-\U0001F64F'
+        u'\U0001F300-\U0001F5FF'
+        u'\U0001F680-\U0001F6FF'
+        u'\U0001F1E0-\U0001F1FF'
+        u'\U00002700-\U000027BF'
+        u'\U0001F900-\U0001F9FF'
+        u'\U00002600-\U000026FF'
+        u'\u2640-\u2642'
+        u'\u2194-\u2199'
+        u'\u23cf\u23e9\u25aa'
+        u'\u231a\u23f0\u23f3'
+        u'\ufe0f\u20e3\u200d]+',
+        '', cleaned, flags=re.UNICODE
+    )
     return cleaned.strip()
 
 
