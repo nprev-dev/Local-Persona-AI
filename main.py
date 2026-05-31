@@ -34,6 +34,9 @@ def load_personality() -> str:
         rules = p.get("hard_rules", [])
         if rules:
             prompt += "\n\nRules you always follow:\n" + "\n".join(f"- {r}" for r in rules)
+        constraints = p.get("hard_constraints", [])
+        if constraints:
+            prompt += "\n\nABSOLUTE RULES YOU NEVER BREAK:\n" + "\n".join(f"- {c}" for c in constraints)
         return prompt
     except Exception as e:
         print(f"[Personality] Could not load personality.json: {e}")
@@ -44,10 +47,10 @@ print("[Personality] Loaded successfully")
 
 init_memory_db()
 
-CHAT_MODEL   = "qwen2.5:7b"
-MEMORY_MODEL = "phi3"
+CHAT_MODEL    = "qwen2.5:7b"
+MEMORY_MODEL  = "phi3"
 
-CURRENT_MODEL       = "qwen2.5:7b"
+CURRENT_MODEL = "qwen2.5:7b"
 
 
 class ChatRequest(BaseModel):
