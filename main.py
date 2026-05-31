@@ -295,8 +295,7 @@ async def chat(data: ChatRequest):
 
         for token in ask_ollama_stream(messages, model=CURRENT_MODEL):
             full_reply += token
-            clean_token = strip_thinking(token)
-            yield json.dumps({"token": clean_token}) + "\n"
+            yield json.dumps({"token": token}) + "\n"
 
         # Save chat history
         full_reply = strip_thinking(full_reply)
