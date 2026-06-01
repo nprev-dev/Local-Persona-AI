@@ -47,10 +47,10 @@ print("[Personality] Loaded successfully")
 
 init_memory_db()
 
-CHAT_MODEL    = "qwen2.5:7b"
+CHAT_MODEL    = "llama3.1:8b" # qwen2.5:7b for better reasoning, llama3.1:8b better personality following.
 MEMORY_MODEL  = "phi3"
 
-CURRENT_MODEL = "qwen2.5:7b"
+CURRENT_MODEL = "llama3.1:8b" # qwen2.5:7b for better reasoning, llama3.1:8b better personality following.
 
 
 class ChatRequest(BaseModel):
