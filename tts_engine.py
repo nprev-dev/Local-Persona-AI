@@ -11,7 +11,7 @@ from pathlib import Path
 # CONFIGURE
 # ─────────────────────────────────────────────────────────────────────────────
 
-# Path to your reference audio clip (5-30 seconds of clean voice)
+# Path to your reference audio clip (5-30 seconds of clean voice for good result)
 REFERENCE_CLIP = "aemeath_ref.wav" # Modify to sample of your voice
  
 # Emotion exaggeration level (0.0 to 1.0)
