@@ -1,0 +1,6 @@
+memory_store.db
+memory.json
+personality.json
+voices/
+__pycache__/
+aemeath_ref.wav

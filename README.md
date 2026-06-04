@@ -1,13 +1,7 @@
-This is my personal ai assistant project.
-Runs 100% local on your machine using Ollama
+# Tauri + Vanilla
 
-Run ollama pull <model_name> after downloading ollama to download desired model.
+This template should help get you started developing with Tauri in vanilla HTML, CSS and Javascript.
 
-Command to check if your pc is fighting for VRAM:
+## Recommended IDE Setup
 
-nvidia-smi -l 1 --query-gpu=utilization.gpu,utilization.memory,memory.used,memory.free --format=csv
-
-Logs of stuff i tried/changed:
- - Replaced entire RVC pipeline (dependency/requirements of hell)
- - 
-  
+- [VS Code](https://code.visualstudio.com/) + [Tauri](https://marketplace.visualstudio.com/items?itemName=tauri-apps.tauri-vscode) + [rust-analyzer](https://marketplace.visualstudio.com/items?itemName=rust-lang.rust-analyzer)
