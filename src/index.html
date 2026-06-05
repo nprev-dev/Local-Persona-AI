@@ -1,58 +1,21 @@
-<!DOCTYPE html>
-<html>
-<head>
-  <meta charset="UTF-8">
-  <title>Local Persona AI</title>
-  <style>
-    * { margin: 0; padding: 0; box-sizing: border-box; }
-    body {
-      background: #0f1115;
-      color: white;
-      font-family: Arial, sans-serif;
-      display: flex;
-      flex-direction: column;
-      align-items: center;
-      justify-content: center;
-      height: 100vh;
-    }
-    .title { font-size: 26px; font-weight: bold; margin-bottom: 12px; }
-    .status { font-size: 13px; opacity: 0.5; margin-bottom: 24px; }
-    .spinner {
-      width: 36px; height: 36px;
-      border: 3px solid #2a2f3a;
-      border-top-color: #4e7cff;
-      border-radius: 50%;
-      animation: spin 0.8s linear infinite;
-    }
-    @keyframes spin { to { transform: rotate(360deg); } }
-  </style>
-</head>
-<body>
-  <div class="title">Local Persona AI</div>
-  <div class="status" id="status">Starting up...</div>
-  <div class="spinner"></div>
-
-  <script>
-    async function waitForBackend() {
-      const status = document.getElementById("status");
-      let attempts = 0;
-      while (true) {
-        try {
-          const res = await fetch("http://localhost:8000/memory-count", {
-            signal: AbortSignal.timeout(2000)
-          });
-          if (res.ok) {
-            status.textContent = "Ready! Loading...";
-            window.location.href = "http://localhost:8000";
-            return;
-          }
-        } catch (_) {}
-        attempts++;
-        status.textContent = `Starting backend... (${attempts * 2}s)`;
-        await new Promise(r => setTimeout(r, 2000));
+async function waitForBackend() {
+  const status = document.getElementById("status");
+  let attempts = 0;
+  
+  while (true) {
+    try {
+      const res = await fetch("http://localhost:8000/memory-count", {
+        signal: AbortSignal.timeout(2000)
+      });
+      if (res.ok) {
+        status.textContent = "Ready ! Loadinng...";
+        window.location.href = "http://localhost:8000";
+        return;
       }
-    }
-    waitForBackend();
-  </script>
-</body>
-</html>
+    } catch (_) {}
+    attempts++;
+    status.textContent = `Starting backend... (${attempts * 2}s)`;
+    await new Promise(r => setTimeout(r, 2000));
+  }
+}
+waitForBackend();

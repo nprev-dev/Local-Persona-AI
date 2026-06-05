@@ -4,8 +4,7 @@
   "version": "0.1.0",
   "identifier": "com.localpersona.app",
   "build": {
-    "frontendDist": "../src",
-    "devUrl": "http://localhost:8000"
+    "frontendDist": "../src"
   },
   "app": {
     "withGlobalTauri": true,
@@ -19,7 +18,8 @@
       }
     ],
     "security": {
-      "csp": null
+      "csp": null,
+      "capabilities": ["default"]
     }
   },
   "bundle": {
