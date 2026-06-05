@@ -8,32 +8,46 @@ pub fn run() {
         .plugin(tauri_plugin_shell::init())
         .setup(|app| {
             let app_handle = app.handle().clone();
-            let backend_dir = std::path::PathBuf::from(
-                "C:\\Users\\Nate\\Desktop\\aiproject\\backend"
-            );
+
+            // Find backend folder relative to exe location
+            let exe_dir = std::env::current_exe()
+                .unwrap()
+                .parent()
+                .unwrap()
+                .to_path_buf();
+            let backend_dir = exe_dir.join("backend");
+
+            // Find Python and Ollama dynamically from PATH
+            let python = which::which("python")
+                .unwrap_or_else(|_| std::path::PathBuf::from("python"));
+            let ollama = which::which("ollama")
+                .unwrap_or_else(|_| std::path::PathBuf::from("ollama"));
+
+            println!("Python: {:?}", python);
+            println!("Ollama: {:?}", ollama);
+            println!("Backend: {:?}", backend_dir);
 
             // Start Ollama
             app_handle
                 .shell()
-                .command("C:\\Users\\Nate\\AppData\\Local\\Programs\\Ollama\\ollama.exe")
+                .command(ollama.to_str().unwrap())
                 .args(["serve"])
                 .spawn()
                 .ok();
 
-            // Start Python backend then navigate window
             let app_handle2 = app_handle.clone();
             std::thread::spawn(move || {
                 std::thread::sleep(std::time::Duration::from_secs(3));
 
                 app_handle2
                     .shell()
-                    .command("C:\\Users\\Nate\\AppData\\Local\\Programs\\Python\\Python311\\python.exe")
+                    .command(python.to_str().unwrap())
                     .args(["-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"])
                     .current_dir(&backend_dir)
                     .spawn()
                     .ok();
 
-                // Poll until backend is ready then navigate
+                // Poll until backend ready then navigate
                 loop {
                     std::thread::sleep(std::time::Duration::from_secs(2));
                     if let Ok(response) = reqwest::blocking::get("http://localhost:8000/memory-count") {
@@ -48,6 +62,23 @@ pub fn run() {
             });
 
             Ok(())
+        })
+        .on_window_event(|window, event| {
+            if let tauri::WindowEvent::CloseRequested { .. } = event {
+                // Kill Python and Ollama on close
+                #[cfg(target_os = "windows")]
+                {
+                    std::process::Command::new("taskkill")
+                        .args(["/F", "/IM", "python.exe"])
+                        .spawn()
+                        .ok();
+                    std::process::Command::new("taskkill")
+                        .args(["/F", "/IM", "ollama.exe"])
+                        .spawn()
+                        .ok();
+                }
+                std::process::exit(0);
+            }
         })
         .run(tauri::generate_context!())
         .expect("error while running tauri application");
