@@ -291,11 +291,12 @@ async def chat(data: ChatRequest):
     messages          = build_chat_messages(user_input, chat_memory, relevant_memories)
 
     async def response_stream():
+        nonlocal chat_memory
         full_reply = ""
 
         for token in ask_ollama_stream(messages, model=CURRENT_MODEL):
             full_reply += token
-            yield json.dumps({"token": token}) + "\n"
+            yield json.dumps({"token": token}) + "\n" + " " * 512 + "\n"
 
         # Save chat history
         full_reply = strip_thinking(full_reply)
@@ -324,7 +325,15 @@ async def chat(data: ChatRequest):
             "memory_count": counts
         }) + "\n"
 
-    return StreamingResponse(response_stream(), media_type="application/x-ndjson")
+    return StreamingResponse(
+        response_stream(),
+        media_type="application/x-ndjson",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        }
+    )
 
 @app.post("/ingest")
 async def ingest(data: IngestRequest):
@@ -436,13 +445,6 @@ async def speak(data: SpeakRequest):
             else:
                 print(f"[TTS] No audio for sentence")
 
-    return StreamingResponse(
-        response_stream(),
-        media_type="application/x-ndjson",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-            "Connection": "keep-alive",
-        }
-    )
+    return StreamingResponse(stream_sentences(), media_type="audio/octet-stream")
+    
     
