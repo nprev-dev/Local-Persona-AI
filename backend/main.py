@@ -302,7 +302,7 @@ async def chat(data: ChatRequest):
         chat_memory.append({"role": "user",      "content": user_input})
         chat_memory.append({"role": "assistant", "content": full_reply})
         if len(chat_memory) > 60:
-            chat_memory[-60:]
+            chat_memory = chat_memory[-60:]
         save_chat_memory(chat_memory)
         unload_ollama()
 
@@ -436,5 +436,13 @@ async def speak(data: SpeakRequest):
             else:
                 print(f"[TTS] No audio for sentence")
 
-    return StreamingResponse(stream_sentences(), media_type="audio/octet-stream")
+    return StreamingResponse(
+        response_stream(),
+        media_type="application/x-ndjson",
+        headers={
+            "Cache-Control": "no-cache",
+            "X-Accel-Buffering": "no",
+            "Connection": "keep-alive",
+        }
+    )
     
