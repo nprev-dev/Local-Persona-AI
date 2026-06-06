@@ -6,6 +6,7 @@ import json
 import re
 from pydantic import BaseModel
 from tts_engine import synthesize, synthesize_sentence, set_reference_clip
+import httpx
 
 from memory_engine import (
     init_memory_db,
@@ -86,34 +87,27 @@ def strip_thinking(text: str) -> str:
 
 # ── Ollama API helpers ─────────────────────────────────────────────────────────
 
-def ask_ollama_stream(messages: list, model: str = CHAT_MODEL, max_tokens: int = 150):
-    """Generator that yields tokens as they stream from Ollama."""
-    if model is None:
-        model = CURRENT_MODEL
-    response = requests.post(
-        "http://localhost:11434/api/chat",
-        json={
+async def ask_ollama_stream(messages: list, model: str = CHAT_MODEL, max_tokens: int = 150):
+    async with httpx.AsyncClient(timeout=120) as client:
+        async with client.stream("POST", "http://localhost:11434/api/chat", json={
             "model":      model,
             "messages":   messages,
             "stream":     True,
             "options":    {"num_predict": max_tokens},
             "keep_alive": 0
-        },
-        stream=True
-    )
-    response.raise_for_status()
-    for line in response.iter_lines():
-        if not line:
-            continue
-        try:
-            data = json.loads(line)
-            token = data.get("message", {}).get("content", "")
-            if token:
-                yield token
-            if data.get("done"):
-                break
-        except json.JSONDecodeError:
-            continue
+        }) as response:
+            async for line in response.aiter_lines():
+                if not line:
+                    continue
+                try:
+                    data = json.loads(line)
+                    token = data.get("message", {}).get("content", "")
+                    if token:
+                        yield token
+                    if data.get("done"):
+                        break
+                except json.JSONDecodeError:
+                    continue
 
 def unload_ollama():
     """Force Ollama to release VRAM after responding."""
@@ -294,7 +288,7 @@ async def chat(data: ChatRequest):
         nonlocal chat_memory
         full_reply = ""
 
-        for token in ask_ollama_stream(messages, model=CURRENT_MODEL):
+        async for token in ask_ollama_stream(messages, model=CURRENT_MODEL):
             full_reply += token
             yield json.dumps({"token": token}) + "\n" + " " * 512 + "\n"
 

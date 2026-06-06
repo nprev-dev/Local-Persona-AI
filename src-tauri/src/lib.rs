@@ -39,7 +39,7 @@ pub fn run() {
                 // Start Python without terminal window
                 #[cfg(target_os = "windows")]
                 std::process::Command::new(python.to_str().unwrap())
-                    .args(["-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000"])
+                    .args(["-m", "uvicorn", "main:app", "--host", "0.0.0.0", "--port", "8000", "--http", "httptools"])
                     .current_dir(&backend_dir)
                     .creation_flags(0x08000000)
                     .spawn()
