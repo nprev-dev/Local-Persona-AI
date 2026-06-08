@@ -64,14 +64,12 @@ This is an early working release. Everything below works but some things are sti
 |---|---|---|
 | Python 3.11 | Backend runtime | [python.org](https://www.python.org/downloads/) |
 | Ollama | Local LLM inference | [ollama.com](https://ollama.com) |
-| llama3.1:8b | Chat model | `ollama pull llama3.1:8b` |
-| phi3 | Memory judge model | `ollama pull phi3` |
 
 ### Python packages
 
 ```
-A `requirements.txt` is included in the `backend/` folder. Install all dependencies with:
-pip install -r requirements.txt
+A `install.py` is included in the `backend/` folder. Install all dependencies with:
+python install.py
 ```
 
 ### Hardware
@@ -148,7 +146,6 @@ A lot was tried before arriving at the current stack. Documented here for anyone
 
 ## Roadmap
 
-- [ ] Automated dependency installer
 - [ ] Model selection UI
 - [ ] Voice switching UI
 - [ ] Second GPU support for dedicated TTS VRAM
