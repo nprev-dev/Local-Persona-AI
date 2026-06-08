@@ -41,14 +41,14 @@ The Tauri shell starts Ollama and the Python backend on launch, polls until the 
 
 ---
 
-## Current State (v0.1.0)
+## Current State (v0.2.0)
 
 This is an early working release. Everything below works but some things are still hardcoded or manual:
 
 - **Models are hardcoded** — `llama3.1:8b` for chat, `phi3` for the memory judge. You can change these in `main.py` but there's no UI for it yet.
 - **Model installation is manual** — you need to pull Ollama models yourself before running (see setup below).
 - **Voice model is manual** — bring your own reference `.wav` clip and set the path in `tts_engine.py`.
-- **No installer yet** — dependencies must be installed manually via pip. An automated setup script is planned for v0.2.0.
+- **GUI installer included** — run install.py before first launch to install dependencies and pull Ollama models. Located in the backend/ folder.
 - **Single GPU only** — Ollama and Chatterbox share VRAM. On a 12GB card this means long TTS generation time. A dual GPU support setup is planned.
 - **Windows only** — tested on Windows 11. Linux/Mac untested.
 - **TTS quality depends on your reference clip** — longer and cleaner clips (45+ seconds) produce better results but might take longer to generate.
@@ -93,7 +93,7 @@ pip install -r requirements.txt
 3. Install Python dependencies:
    ```
    cd backend
-   pip install -r requirements.txt
+   python install.py
    ```
 4. Add your voice reference clip to the `backend/` folder and update `REFERENCE_CLIP` in `tts_engine.py`
 5. Edit `backend/personality.json` to define your character
