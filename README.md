@@ -90,7 +90,7 @@ pip install -r requirements.txt
    ollama pull llama3.1:8b
    ollama pull phi3
    ```
-3. Install Python dependencies:
+3. Install dependencies + Ollama models:
    ```
    cd backend
    python install.py
