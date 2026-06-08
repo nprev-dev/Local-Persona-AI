@@ -52,6 +52,7 @@ This is an early working release. Everything below works but some things are sti
 - **Single GPU only** — Ollama and Chatterbox share VRAM. On a 12GB card this means long TTS generation time. A dual GPU support setup is planned.
 - **Windows only** — tested on Windows 11. Linux/Mac untested.
 - **TTS quality depends on your reference clip** — longer and cleaner clips (45+ seconds) produce better results but might take longer to generate.
+- **Model quality affects personality** — smaller models may partially or fully ignore personality instructions and hard rules. llama3.1:8b is the minimum recommended, larger models follow character instructions significantly better.
 
 ---
 
@@ -69,11 +70,8 @@ This is an early working release. Everything below works but some things are sti
 ### Python packages
 
 ```
-pip install fastapi uvicorn[standard] httpx requests openai pydantic
-pip install chatterbox-tts
-pip install transformers torch
-pip install faiss-cpu sentence-transformers rank-bm25
-pip install httptools
+A `requirements.txt` is included in the `backend/` folder. Install all dependencies with:
+pip install -r requirements.txt
 ```
 
 ### Hardware
@@ -120,10 +118,6 @@ pip install httptools
 }
 ```
 
-### Voice
-
-Replace `aemeath_ref.wav` with any clean WAV reference clip (10–60 seconds of clear speech, no background noise). Update the path in `tts_engine.py`.
-
 ---
 
 ## What Didn't Work (Research Log)
@@ -166,6 +160,10 @@ A lot was tried before arriving at the current stack. Documented here for anyone
 - [ ] Character avatar panel
 - [ ] Vision support
 - [ ] Linux support
+- [ ] Major UI rework
+- [ ] API key support (OpenAI-compatible backends as alternative to Ollama)
+- [ ] Multiple named chats / conversation switching
+- [ ] Cross-chat persistent memory
 
 ---
 
