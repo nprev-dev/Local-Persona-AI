@@ -123,8 +123,6 @@ A lot was tried before arriving at the current stack. Documented here for anyone
 | **edge-tts + RVC pipeline** | edge-tts produces flat robotic audio; RVC blocked by fairseq install failure |
 | **Kokoro + RVC** | Kokoro worked fine; RVC still blocked by fairseq regardless of approach |
 | **RVC WebUI voice conversion** | Works as standalone but Japanese-trained voice model sounds alien on English TTS input |
-| **FModel pak extraction** | AES keys loaded correctly but pak files remained inaccessible — unresolved |
-| **UnrealPak extraction** | Pak version mismatch (version 12) — tool too old for target game |
 | **Python 3.14** | Entire ML ecosystem (numpy, faiss, sentence-transformers) has no wheels yet |
 | **rvc-inferpy** | Requires rvc-python as dependency — same fairseq conflict |
 | **fairseq source patching** | Fixed one dataclass error, revealed 10 more in the hydra dependency chain |
