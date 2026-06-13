@@ -6,7 +6,6 @@ import json
 import re
 from pydantic import BaseModel
 from tts_engine import synthesize, synthesize_sentence, set_reference_clip
-import httpx
 
 from memory_engine import (
     init_memory_db,
@@ -20,38 +19,81 @@ from memory_engine import (
 )
 
 app = FastAPI()
+from fastapi.staticfiles import StaticFiles
+app.mount("/vendor", StaticFiles(directory="vendor"), name="vendor")
 
-def load_personality() -> str:
-    try:
-        with open("personality.json", "r", encoding="utf-8") as f:
-            p = json.load(f)
-        prompt = p.get("base_prompt", "You are a helpful AI assistant.")
-        traits = p.get("traits", [])
-        if traits:
-            prompt += "\n\nYour personality traits:\n" + "\n".join(f"- {t}" for t in traits)
-        style = p.get("speech_style", [])
-        if style:
-            prompt += "\n\nHow you speak:\n" + "\n".join(f"- {s}" for s in style)
-        rules = p.get("hard_rules", [])
-        if rules:
-            prompt += "\n\nRules you always follow:\n" + "\n".join(f"- {r}" for r in rules)
-        constraints = p.get("hard_constraints", [])
-        if constraints:
-            prompt += "\n\nABSOLUTE RULES YOU NEVER BREAK:\n" + "\n".join(f"- {c}" for c in constraints)
-        return prompt
-    except Exception as e:
-        print(f"[Personality] Could not load personality.json: {e}")
-        return "You are a helpful AI assistant."
-
-PERSONALITY_PROMPT = load_personality()
-print("[Personality] Loaded successfully")
 
 init_memory_db()
 
-CHAT_MODEL    = "llama3.1:8b" # qwen2.5:7b for better reasoning, llama3.1:8b better personality following.
-MEMORY_MODEL  = "phi3"
+client = None #OpenAI()
 
-CURRENT_MODEL = "llama3.1:8b" # qwen2.5:7b for better reasoning, llama3.1:8b better personality following.
+USE_OPENAI = False
+
+CHAT_MODEL   = "qwen2.5:7b"
+MEMORY_MODEL = "phi3"
+
+CURRENT_MODEL = "qwen2.5:7b"
+
+PERSONALITY_FILE = "personality.json"
+
+
+# ── Personality system ──────────────────────────────────────────────────────────
+
+def load_personality_raw() -> dict:
+    """Load the raw personality.json dict. Returns a default if missing/broken."""
+    try:
+        with open(PERSONALITY_FILE, "r", encoding="utf-8") as f:
+            return json.load(f)
+    except Exception as e:
+        print(f"[Personality] Could not load {PERSONALITY_FILE}: {e}")
+        return {
+            "name": "Assistant",
+            "avatar_color": "#22d3ee",
+            "avatar_initial": "A",
+            "persona": "A helpful AI assistant.",
+            "base_prompt": "You are a helpful assistant. Be concise, accurate, and friendly.",
+            "traits": [],
+            "speech_style": [],
+            "hard_constraints": [],
+            "hard_rules": [],
+            "tts_enabled": True,
+            "voice_style": "neutral",
+            "response_style": "balanced",
+            "language": "English"
+        }
+
+
+def save_personality_raw(data: dict):
+    with open(PERSONALITY_FILE, "w", encoding="utf-8") as f:
+        json.dump(data, f, indent=2, ensure_ascii=False)
+
+
+def build_personality_prompt(p: dict) -> str:
+    """Build the full system prompt text from a personality dict."""
+    prompt = p.get("base_prompt", "You are a helpful assistant.")
+
+    traits = p.get("traits", [])
+    if traits:
+        prompt += "\n\nYour personality traits:\n" + "\n".join(f"- {t}" for t in traits)
+
+    style = p.get("speech_style", [])
+    if style:
+        prompt += "\n\nHow you speak:\n" + "\n".join(f"- {s}" for s in style)
+
+    rules = p.get("hard_rules", [])
+    if rules:
+        prompt += "\n\nRules you always follow:\n" + "\n".join(f"- {r}" for r in rules)
+
+    constraints = p.get("hard_constraints", [])
+    if constraints:
+        prompt += "\n\nABSOLUTE RULES YOU NEVER BREAK:\n" + "\n".join(f"- {c}" for c in constraints)
+
+    return prompt
+
+
+PERSONALITY        = load_personality_raw()
+PERSONALITY_PROMPT = build_personality_prompt(PERSONALITY)
+print(f"[Personality] Loaded '{PERSONALITY.get('name', 'Assistant')}'")
 
 
 class ChatRequest(BaseModel):
@@ -61,53 +103,79 @@ class IngestRequest(BaseModel):
     text:   str
     source: str = "manual"
 
+class PersonalityUpdate(BaseModel):
+    name:             str = "Assistant"
+    avatar_color:     str = "#22d3ee"
+    avatar_initial:   str = "A"
+    persona:          str = ""
+    base_prompt:      str = ""
+    traits:           list = []
+    speech_style:     list = []
+    hard_constraints: list = []
+    hard_rules:       list = []
+    tts_enabled:      bool = True
+    voice_style:      str = "neutral"
+    response_style:   str = "balanced"
+    language:         str = "English"
+
 
 # ── Thinking tag stripper ──────────────────────────────────────────────────────
 # outputs <think>...</think> blocks before its reply.
 # We strip these so users only see the actual response.
 def strip_thinking(text: str) -> str:
     cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
-    cleaned = re.sub(
-        u'[\U0001F600-\U0001F64F'
-        u'\U0001F300-\U0001F5FF'
-        u'\U0001F680-\U0001F6FF'
-        u'\U0001F1E0-\U0001F1FF'
-        u'\U00002700-\U000027BF'
-        u'\U0001F900-\U0001F9FF'
-        u'\U00002600-\U000026FF'
-        u'\u2640-\u2642'
-        u'\u2194-\u2199'
-        u'\u23cf\u23e9\u25aa'
-        u'\u231a\u23f0\u23f3'
-        u'\ufe0f\u20e3\u200d]+',
-        '', cleaned, flags=re.UNICODE
-    )
     return cleaned.strip()
 
 
 # ── Ollama API helpers ─────────────────────────────────────────────────────────
+# ask_ollama uses /api/chat (messages array) — supports proper system messages.
+# _ask_generate uses /api/generate (raw prompt) — used only by the memory judge.
 
-async def ask_ollama_stream(messages: list, model: str = CHAT_MODEL, max_tokens: int = 150):
-    async with httpx.AsyncClient(timeout=120) as client:
-        async with client.stream("POST", "http://localhost:11434/api/chat", json={
+def ask_ollama(messages: list, model: str = CHAT_MODEL, max_tokens: int = 150) -> str:
+    if model is None:
+        model = CURRENT_MODEL
+    response = requests.post(
+        "http://localhost:11434/api/chat",
+        json={
+            "model":    model,
+            "messages": messages,
+            "stream":   False,
+            "options":  {"num_predict": max_tokens},
+            "keep_alive": 0
+        }
+    )
+    response.raise_for_status()
+    raw = response.json()["message"]["content"]
+    return strip_thinking(raw)
+
+def ask_ollama_stream(messages: list, model: str = CHAT_MODEL, max_tokens: int = 150):
+    """Generator that yields tokens as they stream from Ollama."""
+    if model is None:
+        model = CURRENT_MODEL
+    response = requests.post(
+        "http://localhost:11434/api/chat",
+        json={
             "model":      model,
             "messages":   messages,
             "stream":     True,
             "options":    {"num_predict": max_tokens},
             "keep_alive": 0
-        }) as response:
-            async for line in response.aiter_lines():
-                if not line:
-                    continue
-                try:
-                    data = json.loads(line)
-                    token = data.get("message", {}).get("content", "")
-                    if token:
-                        yield token
-                    if data.get("done"):
-                        break
-                except json.JSONDecodeError:
-                    continue
+        },
+        stream=True
+    )
+    response.raise_for_status()
+    for line in response.iter_lines():
+        if not line:
+            continue
+        try:
+            data = json.loads(line)
+            token = data.get("message", {}).get("content", "")
+            if token:
+                yield token
+            if data.get("done"):
+                break
+        except json.JSONDecodeError:
+            continue
 
 def unload_ollama():
     """Force Ollama to release VRAM after responding."""
@@ -137,6 +205,15 @@ def _ask_generate(prompt: str, model: str = MEMORY_MODEL, max_tokens: int = 180)
     response.raise_for_status()
     raw = response.json()["response"]
     return strip_thinking(raw)
+
+
+def ask_openai(messages: list) -> str:
+    response = client.chat.completions.create(
+        model="gpt-4.1-mini",
+        messages=messages
+    )
+    return response.choices[0].message.content
+
 
 # ── Chat history ───────────────────────────────────────────────────────────────
 
@@ -278,6 +355,8 @@ async def home():
 
 @app.post("/chat")
 async def chat(data: ChatRequest):
+    import asyncio
+
     user_input = data.user_input.strip()
 
     chat_memory       = load_chat_memory()
@@ -285,19 +364,33 @@ async def chat(data: ChatRequest):
     messages          = build_chat_messages(user_input, chat_memory, relevant_memories)
 
     async def response_stream():
-        nonlocal chat_memory
-        full_reply = ""
+        loop  = asyncio.get_event_loop()
+        queue = asyncio.Queue()
+        full_reply_box = {"text": ""}
 
-        async for token in ask_ollama_stream(messages, model=CURRENT_MODEL):
-            full_reply += token
-            yield json.dumps({"token": token}) + "\n" + " " * 512 + "\n"
+        # Run the blocking Ollama stream in a worker thread.
+        def produce():
+            try:
+                for token in ask_ollama_stream(messages, model=CURRENT_MODEL):
+                    full_reply_box["text"] += token
+                    loop.call_soon_threadsafe(queue.put_nowait, token)
+            finally:
+                loop.call_soon_threadsafe(queue.put_nowait, None)  # sentinel = done
+
+        loop.run_in_executor(None, produce)
+
+        # Drain the queue as tokens arrive and flush each to the client.
+        while True:
+            token = await queue.get()
+            if token is None:
+                break
+            yield json.dumps({"token": token}) + "\n"
+
+        full_reply = full_reply_box["text"]
 
         # Save chat history
-        full_reply = strip_thinking(full_reply)
         chat_memory.append({"role": "user",      "content": user_input})
         chat_memory.append({"role": "assistant", "content": full_reply})
-        if len(chat_memory) > 60:
-            chat_memory = chat_memory[-60:]
         save_chat_memory(chat_memory)
         unload_ollama()
 
@@ -319,15 +412,7 @@ async def chat(data: ChatRequest):
             "memory_count": counts
         }) + "\n"
 
-    return StreamingResponse(
-        response_stream(),
-        media_type="application/x-ndjson",
-        headers={
-            "Cache-Control": "no-cache",
-            "X-Accel-Buffering": "no",
-            "Connection": "keep-alive",
-        }
-    )
+    return StreamingResponse(response_stream(), media_type="application/x-ndjson")
 
 @app.post("/ingest")
 async def ingest(data: IngestRequest):
@@ -397,6 +482,59 @@ async def update_settings(settings: dict):
     return {"status": "ok", "model": CURRENT_MODEL}
 
 
+@app.get("/models")
+async def list_models():
+    """
+    Return the list of locally installed Ollama models so the UI's
+    model picker only shows models that actually exist on this machine.
+    """
+    try:
+        response = requests.get("http://localhost:11434/api/tags", timeout=5)
+        response.raise_for_status()
+        data = response.json()
+        models = []
+        for m in data.get("models", []):
+            name = m.get("name", "")
+            if name:
+                models.append({
+                    "id":       name,
+                    "label":    name,
+                    "provider": "Ollama (local)"
+                })
+        return {"models": models, "current": CURRENT_MODEL}
+    except Exception as e:
+        # Fall back to at least the current model so the picker isn't empty
+        return {
+            "models":  [{"id": CURRENT_MODEL, "label": CURRENT_MODEL, "provider": "Ollama (local)"}],
+            "current": CURRENT_MODEL,
+            "error":   str(e)
+        }
+
+
+@app.get("/personality")
+async def get_personality():
+    """Return the current personality as a character object for the UI."""
+    return PERSONALITY
+
+
+@app.post("/personality")
+async def update_personality(update: PersonalityUpdate):
+    """
+    Save edits from the Characters page back to personality.json and
+    reload the active personality prompt in place (no restart needed).
+    """
+    global PERSONALITY, PERSONALITY_PROMPT
+
+    data = update.model_dump()
+    save_personality_raw(data)
+
+    PERSONALITY        = data
+    PERSONALITY_PROMPT = build_personality_prompt(PERSONALITY)
+
+    print(f"[Personality] Updated '{PERSONALITY.get('name', 'Assistant')}'")
+    return {"status": "ok", "personality": PERSONALITY}
+
+
 @app.post("/clear-memory")
 async def clear_chat_memory():
     save_chat_memory([])
@@ -440,5 +578,3 @@ async def speak(data: SpeakRequest):
                 print(f"[TTS] No audio for sentence")
 
     return StreamingResponse(stream_sentences(), media_type="audio/octet-stream")
-    
-    
