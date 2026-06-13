@@ -8,12 +8,16 @@ Local-Persona-AI is a desktop application that lets you run a completely offline
 
 ## What It Does
 
-- **Custom personality** — define any character's speech style, traits, rules, and backstory via a simple JSON file. No coding required.
+- **Custom personality** — define any character's speech style, traits, rules, and backstory via a simple JSON file or directly in the app. No coding required.
+- **In-app character editor** — edit your character's personality, traits, rules, voice style, and response style right in the UI. Changes save to `personality.json` and reload instantly, no restart needed.
+- **In-app model picker** — automatically detects the Ollama models installed on your machine and lets you switch between them from the UI.
 - **Voice cloning** — provide a short reference audio clip and the AI speaks in that voice using Chatterbox TTS with 7-emotion detection.
+- **Per-character voice toggle** — turn TTS on or off per character.
 - **Streaming chat** — token-by-token response streaming, ChatGPT-style, fully local via Ollama.
 - **Hybrid memory** — long-term memory system combining BM25 keyword search and FAISS vector search. The AI remembers facts about you across sessions.
 - **Document ingestion** — paste text or upload files to give the AI knowledge of anything you want.
 - **Sentence-by-sentence audio streaming** — TTS starts playing before the full response is generated.
+- **Fully offline UI** — React, Babel, and the icon set are all vendored locally. The interface makes zero outside calls and works with no internet.
 - **Desktop app** — wrapped in Tauri v2, launches and shuts down cleanly with no terminal windows.
 
 ---
@@ -41,12 +45,13 @@ The Tauri shell starts Ollama and the Python backend on launch, polls until the 
 
 ---
 
-## Current State (v0.2.0)
+## Current State (v0.3.0)
 
 This is an early working release. Everything below works but some things are still hardcoded or manual:
 
-- **Models are hardcoded** — `llama3.1:8b` for chat, `phi3` for the memory judge. You can change these in `main.py` but there's no UI for it yet.
+- **Model selection in-app** — the app detects your installed Ollama models and lets you pick between them from the UI. The default chat model is `llama3.1:8b` and the memory judge is `phi3`.
 - **Model installation is manual** — you need to pull Ollama models yourself for the ones not included in `install.py`.
+- **Personality is fully editable in-app** — define and tweak your character from the UI or by editing `personality.json` directly. Either way changes apply without a restart.
 - **Voice model is manual** — bring your own reference `.wav` clip and set the path in `tts_engine.py`.
 - **GUI installer included** — run install.py before first launch to install dependencies and pull Ollama models. Located in the backend/ folder.
 - **Single GPU only** — Ollama and Chatterbox share VRAM. On a 12GB card this means long TTS generation time. A dual GPU support setup is planned.
@@ -99,15 +104,21 @@ python install.py
 
 ## Customization
 
+You can edit your character two ways: directly in the app's character editor, or by hand in `backend/personality.json`. Both apply without a restart.
+
 ### Personality (`backend/personality.json`)
 
 ```json
 {
+  "name": "Aemeath",
   "base_prompt": "You are ...",
   "traits": ["calm", "witty"],
   "speech_style": ["speaks in short sentences", "rarely uses filler words"],
   "hard_rules": ["never breaks character"],
-  "hard_constraints": ["never reveals you are an AI"]
+  "hard_constraints": ["never reveals you are an AI"],
+  "tts_enabled": true,
+  "voice_style": "expressive",
+  "response_style": "balanced"
 }
 ```
 
@@ -139,21 +150,26 @@ A lot was tried before arriving at the current stack. Documented here for anyone
 | **`document.open/write/close` to inject backend HTML** | Wipes the page before the UI initializes |
 | **Uvicorn default HTTP handler (h11) streaming** | Buffers entire response on Windows before sending — fixed by switching to `--http httptools` |
 | **WebView2 streaming with headers only** | Cache-Control and X-Accel-Buffering headers alone insufficient — root cause was synchronous `requests` library blocking the async loop. Fixed by switching to `httpx` |
+| **Sync generator inside async StreamingResponse** | Looping a blocking Ollama call inside an `async def` generator froze the event loop, so tokens buffered and arrived all at once after a delay. Fixed by running the stream in a worker thread that feeds tokens through an async queue |
 
 ---
 
 ## Roadmap
 
-- [ ] Model selection UI
 - [ ] Voice switching UI
 - [ ] Second GPU support for dedicated TTS VRAM
 - [ ] Character avatar panel
 - [ ] Vision support
 - [ ] Linux support
-- [ ] Major UI rework
 - [ ] API key support (OpenAI-compatible backends as alternative to Ollama)
-- [ ] Multiple named chats / conversation switching
+- [ ] Saving and switching between named chats
+- [ ] Personas stored in separate files (one file per character, for true multi-character switching)
 - [ ] Cross-chat persistent memory
+
+### Done
+
+- [x] Model selection UI
+- [x] Major UI rework
 
 ---
 
