@@ -165,11 +165,8 @@ A lot was tried before arriving at the current stack. Documented here for anyone
 - [ ] Saving and switching between named chats
 - [ ] Personas stored in separate files (one file per character, for true multi-character switching)
 - [ ] Cross-chat persistent memory
-
-### Done
-
-- [x] Model selection UI
-- [x] Major UI rework
+- [ ] Better loading screen
+- [ ] Computer access (do things directly on your pc if given permission)
 
 ---
 
