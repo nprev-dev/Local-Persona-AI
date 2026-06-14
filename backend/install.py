@@ -5,6 +5,7 @@ import threading
 import sys
 import shutil
 import os
+import urllib.request
 
 # ── Models ─────────────────────────────────────────────────────────────────────
 
@@ -34,6 +35,41 @@ CHAT_MODELS = [
 
 MEMORY_MODEL = "phi3"
 
+# ── Vendored front-end libraries (served locally so the UI works offline) ───────
+# Downloaded into backend/vendor/ . Only fetched if missing, so this is a no-op
+# when the repo already shipped them and a repair when they're absent.
+
+VENDOR_FILES = [
+    {
+        "path": "vendor/react.js",
+        "url":  "https://unpkg.com/react@18/umd/react.production.min.js",
+    },
+    {
+        "path": "vendor/react-dom.js",
+        "url":  "https://unpkg.com/react-dom@18/umd/react-dom.production.min.js",
+    },
+    {
+        "path": "vendor/babel.min.js",
+        "url":  "https://unpkg.com/@babel/standalone/babel.min.js",
+    },
+    {
+        "path": "vendor/tabler-icons.min.css",
+        "url":  "https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.19.0/dist/tabler-icons.min.css",
+    },
+    {
+        "path": "vendor/fonts/tabler-icons.woff2",
+        "url":  "https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.19.0/dist/fonts/tabler-icons.woff2",
+    },
+    {
+        "path": "vendor/fonts/tabler-icons.woff",
+        "url":  "https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.19.0/dist/fonts/tabler-icons.woff",
+    },
+    {
+        "path": "vendor/fonts/tabler-icons.ttf",
+        "url":  "https://cdn.jsdelivr.net/npm/@tabler/icons-webfont@3.19.0/dist/fonts/tabler-icons.ttf",
+    },
+]
+
 # ── App ────────────────────────────────────────────────────────────────────────
 
 class InstallerApp:
@@ -47,6 +83,7 @@ class InstallerApp:
         self.selected_model = tk.StringVar(value=CHAT_MODELS[0]["id"])
         self.install_deps   = tk.BooleanVar(value=True)
         self.pull_memory    = tk.BooleanVar(value=True)
+        self.fetch_vendor   = tk.BooleanVar(value=True)
         self.installing     = False
 
         self._build_ui()
@@ -123,6 +160,7 @@ class InstallerApp:
 
         self._check_row(opt_frame, "Install Python dependencies (requirements.txt)", self.install_deps)
         self._check_row(opt_frame, f"Pull memory judge model ({MEMORY_MODEL})", self.pull_memory)
+        self._check_row(opt_frame, "Download UI libraries for offline use (repairs vendor/)", self.fetch_vendor)
         tk.Frame(opt_frame, bg=CARD, height=8).pack()
 
         # ── Log ──
@@ -252,6 +290,27 @@ class InstallerApp:
             else:
                 self._log(f"  ✗ Failed to pull {MEMORY_MODEL}:\n{result.stderr[-300:]}")
                 success = False
+
+        # 4. Vendor UI libraries (offline support)
+        if self.fetch_vendor.get():
+            self._log("→ Checking offline UI libraries...")
+            base = os.path.dirname(__file__)
+            missing = [f for f in VENDOR_FILES
+                       if not os.path.exists(os.path.join(base, f["path"]))]
+
+            if not missing:
+                self._log("  ✓ All UI libraries already present")
+            else:
+                self._log(f"  Downloading {len(missing)} missing file(s)...")
+                for f in missing:
+                    dest = os.path.join(base, f["path"])
+                    os.makedirs(os.path.dirname(dest), exist_ok=True)
+                    try:
+                        urllib.request.urlretrieve(f["url"], dest)
+                        self._log(f"  ✓ {f['path']}")
+                    except Exception as e:
+                        self._log(f"  ✗ {f['path']} — {e}")
+                        success = False
 
         # Done
         self.root.after(0, self._finish, success)
