@@ -93,7 +93,7 @@ const API = ""; // same origin as the served page (FastAPI on :8000)
 // Maps a backend personality.json object -> UI character object.
 function personalityToChar(p) {
   return {
-    id:            'default',
+    id:            p.id || 'default',
     name:          p.name           || 'Assistant',
     avatarColor:   p.avatar_color   || '#22d3ee',
     avatarInitial: p.avatar_initial || (p.name ? p.name.charAt(0).toUpperCase() : 'A'),
@@ -223,9 +223,10 @@ function reducer(s, a) {
       return { ...s, characters: chars };
     }
     case 'DELETE_CHAR': {
-      if (a.v === 'default') return s;
       const chars = s.characters.filter(c => c.id !== a.v);
-      return { ...s, characters: chars, activeCharId: s.activeCharId === a.v ? 'default' : s.activeCharId };
+      if (chars.length === 0) return s;  // never remove the last one
+      const newActive = s.activeCharId === a.v ? chars[0].id : s.activeCharId;
+      return { ...s, characters: chars, activeCharId: newActive };
     }
     default: return s;
   }
@@ -997,10 +998,10 @@ function CharactersPage() {
 
   const activeChar = state.characters.find(c => c.id === state.activeCharId) || state.characters[0];
 
-  // Persist a character to the backend (writes personality.json + reloads prompt).
+  // Persist a character to its own persona file on the backend.
   const persistChar = (char) => {
     dispatch({ type:'UPSERT_CHAR', v:char });
-    fetch(API + "/personality", {
+    fetch(API + "/personas/" + char.id, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(charToPersonality(char)),
@@ -1036,15 +1037,41 @@ function CharactersPage() {
     setDropOpen(false);
   };
 
-  const saveChar = () => {
+  const saveChar = async () => {
     if (!editing.name.trim()) return;
-    const char = {
-      ...editing,
-      avatarInitial: editing.avatarInitial || editing.name.charAt(0).toUpperCase(),
-    };
-    persistChar(char);
-    if (editing.id === activeChar.id || !state.characters.find(c=>c.id===editing.id)) {
-      dispatch({ type:'SET_ACTIVE_CHAR', v:char.id });
+    const isNew = !state.characters.find(c => c.id === editing.id);
+
+    if (isNew) {
+      // Create the persona file on the backend first to get a real id.
+      try {
+        const r = await fetch(API + "/personas/new", {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify({ name: editing.name.trim() }),
+        });
+        const data = await r.json();
+        const realId = data.id;
+        const char = {
+          ...editing,
+          id: realId,
+          avatarInitial: editing.avatarInitial || editing.name.charAt(0).toUpperCase(),
+        };
+        // Save the full details to the new persona, then activate it.
+        await fetch(API + "/personas/" + realId, {
+          method: "POST",
+          headers: { "Content-Type": "application/json" },
+          body: JSON.stringify(charToPersonality(char)),
+        });
+        dispatch({ type:'UPSERT_CHAR', v:char });
+        await fetch(API + "/personas/" + realId + "/activate", { method: "POST" });
+        dispatch({ type:'SET_ACTIVE_CHAR', v:realId });
+      } catch (e) { /* ignore */ }
+    } else {
+      const char = {
+        ...editing,
+        avatarInitial: editing.avatarInitial || editing.name.charAt(0).toUpperCase(),
+      };
+      persistChar(char);
     }
     setEditing(null);
   };
@@ -1054,11 +1081,20 @@ function CharactersPage() {
   const selectChar = (id) => {
     dispatch({ type:'SET_ACTIVE_CHAR', v:id });
     setDropOpen(false);
+    // Tell the backend to switch the active persona (also switches voice).
+    fetch(API + "/personas/" + id + "/activate", { method: "POST" }).catch(() => {});
   };
 
   const doDelete = (id) => {
     dispatch({ type:'DELETE_CHAR', v:id });
     setConfirmDelete(null);
+    fetch(API + "/personas/" + id, { method: "DELETE" })
+      .then(r => r.json())
+      .then(data => {
+        // Backend may have switched active to another persona.
+        if (data && data.active) dispatch({ type:'SET_ACTIVE_CHAR', v:data.active });
+      })
+      .catch(() => {});
   };
 
   // If editing mode
@@ -1743,14 +1779,24 @@ function App() {
         }
       } catch (e) { /* backend not ready */ }
 
-      // Personality -> single character
+      // Personas -> full character list
       try {
-        const r = await fetch(API + "/personality");
+        const r = await fetch(API + "/personas");
         if (r.ok) {
-          const p = await r.json();
-          const char = personalityToChar(p);
-          dispatch({ type:'SET_CHARACTERS', v:[char] });
-          dispatch({ type:'SET_ACTIVE_CHAR', v:char.id });
+          const data = await r.json();
+          const summaries = data.personas || [];
+          // Fetch full data for each persona so the editor has everything.
+          const chars = [];
+          for (const s of summaries) {
+            try {
+              const pr = await fetch(API + "/personas/" + s.id);
+              if (pr.ok) chars.push(personalityToChar(await pr.json()));
+            } catch (e) { /* skip */ }
+          }
+          if (chars.length) {
+            dispatch({ type:'SET_CHARACTERS', v:chars });
+            dispatch({ type:'SET_ACTIVE_CHAR', v: data.active || chars[0].id });
+          }
         }
       } catch (e) { /* ignore */ }
 

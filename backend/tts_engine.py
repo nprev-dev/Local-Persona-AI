@@ -51,7 +51,7 @@ def _get_model():
     try:
         from chatterbox.tts import ChatterboxTTS
     except ImportError:
-        raise RuntimeError("Run: pip install chatterbox-tts") # missing dependency
+        raise RuntimeError("Run: pip install chatterbox-tts") # if missing dependency
     
     ref = Path(REFERENCE_CLIP)
     if not ref.exists():
@@ -202,10 +202,17 @@ def synthesize(text: str) -> bytes:
 # ─────────────────────────────────────────────────────────────────────────────
  
 def set_reference_clip(path: str):
-    """Switch to a different voice reference clip without restarting."""
+    """Switch to a different voice reference clip without restarting.
+
+    If the clip is missing or empty, keep the current voice instead of
+    crashing — a persona without its own voice just uses whatever was loaded.
+    """
     global REFERENCE_CLIP
+    if not path:
+        return
     if not Path(path).exists():
-        raise FileNotFoundError(f"Reference clip not found: {path}")
+        print(f"[TTS] Voice clip not found, keeping current voice: {path}")
+        return
     REFERENCE_CLIP = path
     print(f"[TTS] Voice switched to: {path}")
 

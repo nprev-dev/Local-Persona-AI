@@ -5,3 +5,4 @@ voices/
 __pycache__/
 aemeath_ref.wav
 personality.json
+personas/

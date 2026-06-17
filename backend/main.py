@@ -4,6 +4,7 @@ from openai import OpenAI
 import requests
 import json
 import re
+import os
 from pydantic import BaseModel
 from tts_engine import synthesize, synthesize_sentence, set_reference_clip
 
@@ -34,66 +35,39 @@ MEMORY_MODEL = "phi3"
 
 CURRENT_MODEL = "qwen2.5:7b"
 
-PERSONALITY_FILE = "personality.json"
+# ── Persona system (multi-persona) ──────────────────────────────────────────────
+# Personas live in personas/<id>.json, each with its own voice clip.
+# Chat history and long-term memory stay shared/global.
+
+import persona_manager as pm
+
+pm.ensure_setup()  # creates folder / migrates legacy personality.json on first run
 
 
-# ── Personality system ──────────────────────────────────────────────────────────
-
-def load_personality_raw() -> dict:
-    """Load the raw personality.json dict. Returns a default if missing/broken."""
-    try:
-        with open(PERSONALITY_FILE, "r", encoding="utf-8") as f:
-            return json.load(f)
-    except Exception as e:
-        print(f"[Personality] Could not load {PERSONALITY_FILE}: {e}")
-        return {
-            "name": "Assistant",
-            "avatar_color": "#22d3ee",
-            "avatar_initial": "A",
-            "persona": "A helpful AI assistant.",
-            "base_prompt": "You are a helpful assistant. Be concise, accurate, and friendly.",
-            "traits": [],
-            "speech_style": [],
-            "hard_constraints": [],
-            "hard_rules": [],
-            "tts_enabled": True,
-            "voice_style": "neutral",
-            "response_style": "balanced",
-            "language": "English"
-        }
+def _apply_active_voice():
+    """Point the TTS engine at the active persona's voice clip (if it has one)."""
+    p = pm.get_active_persona()
+    clip = p.get("voice_clip", "")
+    if clip and os.path.exists(clip):
+        try:
+            set_reference_clip(clip)
+        except Exception as e:
+            print(f"[Personas] Could not set voice clip: {e}")
 
 
-def save_personality_raw(data: dict):
-    with open(PERSONALITY_FILE, "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
+def reload_active_persona():
+    """Refresh the cached active persona + system prompt + voice."""
+    global PERSONALITY, PERSONALITY_PROMPT
+    PERSONALITY        = pm.get_active_persona()
+    PERSONALITY_PROMPT = pm.build_personality_prompt(PERSONALITY)
+    _apply_active_voice()
+    return PERSONALITY
 
 
-def build_personality_prompt(p: dict) -> str:
-    """Build the full system prompt text from a personality dict."""
-    prompt = p.get("base_prompt", "You are a helpful assistant.")
-
-    traits = p.get("traits", [])
-    if traits:
-        prompt += "\n\nYour personality traits:\n" + "\n".join(f"- {t}" for t in traits)
-
-    style = p.get("speech_style", [])
-    if style:
-        prompt += "\n\nHow you speak:\n" + "\n".join(f"- {s}" for s in style)
-
-    rules = p.get("hard_rules", [])
-    if rules:
-        prompt += "\n\nRules you always follow:\n" + "\n".join(f"- {r}" for r in rules)
-
-    constraints = p.get("hard_constraints", [])
-    if constraints:
-        prompt += "\n\nABSOLUTE RULES YOU NEVER BREAK:\n" + "\n".join(f"- {c}" for c in constraints)
-
-    return prompt
-
-
-PERSONALITY        = load_personality_raw()
-PERSONALITY_PROMPT = build_personality_prompt(PERSONALITY)
-print(f"[Personality] Loaded '{PERSONALITY.get('name', 'Assistant')}'")
+PERSONALITY        = pm.get_active_persona()
+PERSONALITY_PROMPT = pm.build_personality_prompt(PERSONALITY)
+_apply_active_voice()
+print(f"[Personas] Active persona: '{PERSONALITY.get('name', 'Assistant')}'")
 
 
 class ChatRequest(BaseModel):
@@ -513,26 +487,97 @@ async def list_models():
 
 @app.get("/personality")
 async def get_personality():
-    """Return the current personality as a character object for the UI."""
+    """Return the ACTIVE persona as a character object (back-compat alias)."""
     return PERSONALITY
 
 
 @app.post("/personality")
 async def update_personality(update: PersonalityUpdate):
     """
-    Save edits from the Characters page back to personality.json and
-    reload the active personality prompt in place (no restart needed).
+    Back-compat: save edits to the ACTIVE persona's file and reload in place.
+    Preserves the persona's existing voice_clip.
     """
-    global PERSONALITY, PERSONALITY_PROMPT
-
     data = update.model_dump()
-    save_personality_raw(data)
+    active_id = pm.get_active_id()
+    try:
+        existing = pm.load_persona(active_id)
+        data["voice_clip"] = existing.get("voice_clip", "")
+    except Exception:
+        data["voice_clip"] = ""
 
-    PERSONALITY        = data
-    PERSONALITY_PROMPT = build_personality_prompt(PERSONALITY)
-
-    print(f"[Personality] Updated '{PERSONALITY.get('name', 'Assistant')}'")
+    pm.save_persona(active_id, data)
+    reload_active_persona()
+    print(f"[Personas] Updated active persona '{PERSONALITY.get('name','?')}'")
     return {"status": "ok", "personality": PERSONALITY}
+
+
+# ── Multi-persona endpoints ──────────────────────────────────────────────────
+
+@app.get("/personas")
+async def personas_list():
+    return {"personas": pm.list_personas_summary(), "active": pm.get_active_id()}
+
+
+@app.get("/personas/{pid}")
+async def personas_get(pid: str):
+    try:
+        return pm.load_persona(pid)
+    except Exception:
+        return Response(status_code=404)
+
+
+@app.post("/personas/{pid}")
+async def personas_save(pid: str, update: PersonalityUpdate):
+    """Create or update a persona by id. Preserves its voice_clip if it exists."""
+    data = update.model_dump()
+    try:
+        existing = pm.load_persona(pid)
+        data["voice_clip"] = existing.get("voice_clip", "")
+    except Exception:
+        data["voice_clip"] = ""
+
+    pm.save_persona(pid, data)
+    if pid == pm.get_active_id():
+        reload_active_persona()
+    return {"status": "ok", "persona": pm.load_persona(pid)}
+
+
+@app.post("/personas/{pid}/activate")
+async def personas_activate(pid: str):
+    """Switch the active persona (also switches the voice)."""
+    if not pm.set_active(pid):
+        return Response(status_code=404)
+    reload_active_persona()
+    print(f"[Personas] Switched to '{PERSONALITY.get('name','?')}'")
+    return {"status": "ok", "active": pid, "personality": PERSONALITY}
+
+
+@app.delete("/personas/{pid}")
+async def personas_delete(pid: str):
+    """Delete a persona (won't delete the last one)."""
+    ok = pm.delete_persona(pid)
+    if not ok:
+        return {"status": "error", "message": "Cannot delete (not found or last remaining persona)."}
+    reload_active_persona()
+    return {"status": "ok", "active": pm.get_active_id()}
+
+
+@app.post("/personas/new")
+async def personas_new(payload: dict):
+    """Create a fresh persona from a name. Body: { "name": "Jarvis" }"""
+    name = (payload.get("name") or "New Persona").strip()
+    base_id = pm.slugify(name)
+    pid = base_id
+    n = 2
+    while pid in pm.list_persona_ids():
+        pid = f"{base_id}_{n}"
+        n += 1
+
+    persona = pm._default_persona(pid)
+    persona["name"] = name
+    persona["avatar_initial"] = name[:1].upper()
+    pm.save_persona(pid, persona)
+    return {"status": "ok", "id": pid, "persona": pm.load_persona(pid)}
 
 
 @app.post("/clear-memory")
