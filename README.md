@@ -167,6 +167,7 @@ A lot was tried before arriving at the current stack. Documented here for anyone
 - [ ] Cross-chat persistent memory
 - [ ] Computer access (do things directly on your pc if given permission)
 - [ ] Cleaner install.py
+- [ ] Persona locked chats (one persona locked for one desired chat)
 ---
 
 ## Contact
