@@ -8,8 +8,6 @@ pydantic==2.13.3
 python-multipart==0.0.27
 
 chatterbox-tts==0.1.7
-torch==2.6.0+cu124
-torchaudio==2.6.0
 transformers==5.2.0
 safetensors==0.5.3
 
@@ -21,3 +19,10 @@ numpy==1.26.4
 scipy==1.15.3
 soundfile==0.13.1
 librosa==0.11.0
+
+# NOTE: torch, torchvision, and torchaudio are intentionally NOT listed here.
+# Their CUDA builds (e.g. torch 2.6.0+cu124) are not on PyPI, so a plain
+# `pip install -r requirements.txt` would fail to resolve them and abort the
+# entire install. install.py installs them separately from the PyTorch CUDA
+# index BEFORE installing this file. If you install manually, run first:
+#   pip install torch==2.6.0 torchvision torchaudio --index-url https://download.pytorch.org/whl/cu124

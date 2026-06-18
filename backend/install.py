@@ -35,6 +35,15 @@ CHAT_MODELS = [
 
 MEMORY_MODEL = "phi3"
 
+# ── PyTorch (CUDA build) ────────────────────────────────────────────────────────
+# The CUDA builds of torch are NOT on PyPI — they only resolve from PyTorch's own
+# index. They must be installed separately BEFORE requirements.txt, otherwise a
+# plain `pip install -r requirements.txt` fails to resolve torch and aborts the
+# entire install (which is why uvicorn and everything else ends up missing).
+
+TORCH_PACKAGES   = ["torch==2.6.0", "torchvision", "torchaudio"]
+TORCH_INDEX_URL  = "https://download.pytorch.org/whl/cu124"
+
 # ── Vendored front-end libraries (served locally so the UI works offline) ───────
 # Downloaded into backend/vendor/ . Only fetched if missing, so this is a no-op
 # when the repo already shipped them and a repair when they're absent.
@@ -250,48 +259,67 @@ class InstallerApp:
     def _run_install(self):
         success = True
 
-        # 1. Python deps
+        # 1. PyTorch (CUDA build) — must come BEFORE requirements.txt
+        if self.install_deps.get():
+            self._log("→ Installing PyTorch (CUDA build)...")
+            self._log("  (large download, ~2.5GB — this takes a while)")
+            result = subprocess.run(
+                [sys.executable, "-m", "pip", "install",
+                 *TORCH_PACKAGES, "--index-url", TORCH_INDEX_URL],
+                capture_output=True, text=True,
+                encoding="utf-8", errors="replace"
+            )
+            if result.returncode == 0:
+                self._log("  ✓ PyTorch installed")
+            else:
+                self._log(f"  ✗ Failed:\n{(result.stderr or '')[-400:]}")
+                success = False
+
+        # 2. Remaining Python deps
         if self.install_deps.get():
             self._log("→ Installing Python dependencies...")
             req_path = os.path.join(os.path.dirname(__file__), "requirements.txt")
             result = subprocess.run(
                 [sys.executable, "-m", "pip", "install", "-r", req_path],
-                capture_output=True, text=True
+                capture_output=True, text=True,
+                encoding="utf-8", errors="replace"
             )
             if result.returncode == 0:
                 self._log("  ✓ Dependencies installed")
             else:
-                self._log(f"  ✗ Failed:\n{result.stderr[-400:]}")
+                self._log(f"  ✗ Failed:\n{(result.stderr or '')[-400:]}")
                 success = False
 
-        # 2. Chat model
+        # 3. Chat model
         model = self.selected_model.get()
         self._log(f"→ Pulling chat model: {model}")
         self._log("  (this may take a while depending on your connection)")
         result = subprocess.run(
             ["ollama", "pull", model],
-            capture_output=True, text=True
+            capture_output=True, text=True,
+            encoding="utf-8", errors="replace"
         )
         if result.returncode == 0:
             self._log(f"  ✓ {model} ready")
         else:
-            self._log(f"  ✗ Failed to pull {model}:\n{result.stderr[-300:]}")
+            self._log(f"  ✗ Failed to pull {model}:\n{(result.stderr or '')[-300:]}")
             success = False
 
-        # 3. Memory judge model
+        # 4. Memory judge model
         if self.pull_memory.get():
             self._log(f"→ Pulling memory judge model: {MEMORY_MODEL}")
             result = subprocess.run(
                 ["ollama", "pull", MEMORY_MODEL],
-                capture_output=True, text=True
+                capture_output=True, text=True,
+                encoding="utf-8", errors="replace"
             )
             if result.returncode == 0:
                 self._log(f"  ✓ {MEMORY_MODEL} ready")
             else:
-                self._log(f"  ✗ Failed to pull {MEMORY_MODEL}:\n{result.stderr[-300:]}")
+                self._log(f"  ✗ Failed to pull {MEMORY_MODEL}:\n{(result.stderr or '')[-300:]}")
                 success = False
 
-        # 4. Vendor UI libraries (offline support)
+        # 5. Vendor UI libraries (offline support)
         if self.fetch_vendor.get():
             self._log("→ Checking offline UI libraries...")
             base = os.path.dirname(__file__)
