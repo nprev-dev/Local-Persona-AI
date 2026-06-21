@@ -103,6 +103,7 @@ function personalityToChar(p) {
     visualPanel:   false,
     voiceStyle:    p.voice_style    || 'neutral',
     responseStyle: p.response_style || 'balanced',
+    hasVoice:      !!(p.voice_clip && p.voice_clip.length),
     // keep the original arrays around so saving doesn't lose them
     _traits:           p.traits           || [],
     _speechStyle:      p.speech_style      || [],
@@ -129,6 +130,29 @@ function charToPersonality(c) {
     response_style:   c.responseStyle,
     language:         c._language || 'English',
   };
+}
+
+// Reload the full persona list from the backend and sync UI state.
+// Called on startup and after creating/deleting a persona so ids always match.
+async function reloadPersonas(dispatch, preferredActive) {
+  try {
+    const r = await fetch(API + "/personas");
+    if (!r.ok) return;
+    const data = await r.json();
+    const summaries = data.personas || [];
+    const chars = [];
+    for (const s of summaries) {
+      try {
+        const pr = await fetch(API + "/personas/" + s.id);
+        if (pr.ok) chars.push(personalityToChar(await pr.json()));
+      } catch (e) { /* skip */ }
+    }
+    if (chars.length) {
+      dispatch({ type:'SET_CHARACTERS', v:chars });
+      const active = preferredActive || data.active || chars[0].id;
+      dispatch({ type:'SET_ACTIVE_CHAR', v: active });
+    }
+  } catch (e) { /* ignore */ }
 }
 
 // Fallback character shown until /personality loads.
@@ -279,6 +303,10 @@ async function* chatStream(userInput, signal, onDone) {
 // ─────────────────────────────────────────────────────────────
 let ttsPlaying = false;
 let ttsPending = null;
+
+// Tracks which assistant message ids have already been auto-spoken, so
+// remounting the chat view (e.g. after visiting Characters) doesn't replay them.
+const spokenMessages = new Set();
 
 function audioBufferToWav(buffer) {
   const numCh = buffer.numberOfChannels;
@@ -696,16 +724,17 @@ function MessageBubble({ message, isLive, streamContent, streamPhase, activeChar
   };
 
   // Auto-speak once when an assistant message finishes streaming (if TTS on).
-  const spokenRef = useRef(false);
+  // Uses a module-level set keyed by message id so navigating away and back
+  // (which remounts this component) does NOT replay old messages.
   useEffect(() => {
     if (isUser) return;
-    if (isLive) return;                       // wait until streaming done
-    if (spokenRef.current) return;            // only once
+    if (isLive) return;                          // wait until streaming done
     if (!activeChar.ttsEnabled) return;
     if (!message.content.trim()) return;
-    spokenRef.current = true;
+    if (spokenMessages.has(message.id)) return;  // already spoke this one
+    spokenMessages.add(message.id);
     speakText(message.content, audioRef.current, setSpeaking);
-  }, [isLive, isUser, activeChar.ttsEnabled, message.content]);
+  }, [isLive, isUser, activeChar.ttsEnabled, message.content, message.id]);
 
   if (isUser) {
     return (
@@ -1062,9 +1091,9 @@ function CharactersPage() {
           headers: { "Content-Type": "application/json" },
           body: JSON.stringify(charToPersonality(char)),
         });
-        dispatch({ type:'UPSERT_CHAR', v:char });
         await fetch(API + "/personas/" + realId + "/activate", { method: "POST" });
-        dispatch({ type:'SET_ACTIVE_CHAR', v:realId });
+        // Re-sync the whole list from the backend so ids line up exactly.
+        await reloadPersonas(dispatch, realId);
       } catch (e) { /* ignore */ }
     } else {
       const char = {
@@ -1086,13 +1115,12 @@ function CharactersPage() {
   };
 
   const doDelete = (id) => {
-    dispatch({ type:'DELETE_CHAR', v:id });
     setConfirmDelete(null);
     fetch(API + "/personas/" + id, { method: "DELETE" })
       .then(r => r.json())
       .then(data => {
-        // Backend may have switched active to another persona.
-        if (data && data.active) dispatch({ type:'SET_ACTIVE_CHAR', v:data.active });
+        // Re-sync from backend; it picks the new active persona if needed.
+        reloadPersonas(dispatch, data && data.active);
       })
       .catch(() => {});
   };
@@ -1224,7 +1252,7 @@ function CharactersPage() {
               <div style={{ fontSize:15,fontWeight:600,color:T.text }}>{activeChar.name}</div>
               <div style={{ fontSize:12,color:T.textSecondary,marginTop:2 }}>{activeChar.persona}</div>
             </div>
-            {activeChar.id !== 'default' && (
+            {state.characters.length > 1 && (
               <button onClick={() => setConfirmDelete(activeChar.id)}
                 style={{ padding:'5px 8px',borderRadius:8,border:`1px solid ${T.errorSubtle}`,
                   background:'transparent',cursor:'pointer',color:T.error,fontSize:12 }}>
@@ -1280,6 +1308,20 @@ function CharactersPage() {
                     options={VOICE_STYLES}
                     onChange={v => persistChar({ ...activeChar, voiceStyle:v })}
                   />
+                </SettingRow>
+              )}
+
+              {/* Voice sample upload — shown when TTS on */}
+              {activeChar.ttsEnabled && (
+                <SettingRow
+                  label="Voice Sample"
+                  description={activeChar.hasVoice
+                    ? "Voice sample recognized — this character speaks in its own voice."
+                    : "No voice recognized — upload a .wav clip so this character can speak."}
+                  icon="ti-file-music"
+                  indent
+                >
+                  <VoiceUpload char={activeChar} />
                 </SettingRow>
               )}
 
@@ -1578,6 +1620,62 @@ function Section({ title, children }) {
   );
 }
 
+function VoiceUpload({ char }) {
+  const { dispatch } = useStore();
+  const inputRef = useRef(null);
+  const [busy, setBusy] = useState(false);
+
+  const pick = () => { if (inputRef.current) inputRef.current.click(); };
+
+  const onFile = async (e) => {
+    const file = e.target.files && e.target.files[0];
+    e.target.value = ""; // allow re-selecting the same file later
+    if (!file) return;
+    if (!file.name.toLowerCase().endsWith(".wav")) {
+      alert("Please select a .wav file.");
+      return;
+    }
+    setBusy(true);
+    try {
+      const fd = new FormData();
+      fd.append("file", file, file.name);
+      const r = await fetch(API + "/personas/" + char.id + "/voice", {
+        method: "POST",
+        body: fd,
+      });
+      const data = await r.json();
+      if (data && data.status === "ok") {
+        // Mark this character as having a voice now.
+        dispatch({ type:'UPSERT_CHAR', v:{ ...char, hasVoice:true } });
+      } else {
+        alert((data && data.message) || "Upload failed.");
+      }
+    } catch (err) {
+      alert("Upload failed: " + err);
+    }
+    setBusy(false);
+  };
+
+  return (
+    <div style={{ display:'flex',alignItems:'center',gap:10 }}>
+      <input ref={inputRef} type="file" accept=".wav,audio/wav"
+        onChange={onFile} style={{ display:'none' }} />
+      <button onClick={pick} disabled={busy}
+        style={{ display:'flex',alignItems:'center',gap:7,padding:'7px 12px',
+          borderRadius:9,border:`1px solid ${T.border}`,cursor: busy ? 'default':'pointer',
+          background:T.bgSecondary,color:T.text,fontSize:12.5,opacity: busy ? 0.6 : 1 }}>
+        <i className={`ti ${char.hasVoice ? 'ti-refresh' : 'ti-upload'}`} style={{ fontSize:14 }} />
+        {busy ? 'Uploading…' : (char.hasVoice ? 'Change voice sample' : 'Select voice sample')}
+      </button>
+      <span style={{ display:'inline-flex',alignItems:'center',gap:5,fontSize:11.5,
+        color: char.hasVoice ? T.success : T.textTertiary }}>
+        <i className={`ti ${char.hasVoice ? 'ti-circle-check' : 'ti-circle-x'}`} style={{ fontSize:13 }} />
+        {char.hasVoice ? 'Voice sample recognized' : 'No voice recognized'}
+      </span>
+    </div>
+  );
+}
+
 function SettingRow({ label, description, icon, badge, indent, children }) {
   return (
     <div style={{ display:'flex',alignItems:'center',gap:14,
@@ -1780,25 +1878,7 @@ function App() {
       } catch (e) { /* backend not ready */ }
 
       // Personas -> full character list
-      try {
-        const r = await fetch(API + "/personas");
-        if (r.ok) {
-          const data = await r.json();
-          const summaries = data.personas || [];
-          // Fetch full data for each persona so the editor has everything.
-          const chars = [];
-          for (const s of summaries) {
-            try {
-              const pr = await fetch(API + "/personas/" + s.id);
-              if (pr.ok) chars.push(personalityToChar(await pr.json()));
-            } catch (e) { /* skip */ }
-          }
-          if (chars.length) {
-            dispatch({ type:'SET_CHARACTERS', v:chars });
-            dispatch({ type:'SET_ACTIVE_CHAR', v: data.active || chars[0].id });
-          }
-        }
-      } catch (e) { /* ignore */ }
+      await reloadPersonas(dispatch);
 
       // Memory counts
       try {

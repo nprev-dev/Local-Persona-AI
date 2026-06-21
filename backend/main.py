@@ -580,6 +580,42 @@ async def personas_new(payload: dict):
     return {"status": "ok", "id": pid, "persona": pm.load_persona(pid)}
 
 
+@app.post("/personas/{pid}/voice")
+async def personas_upload_voice(pid: str, file: UploadFile = File(...)):
+    """
+    Upload a .wav voice sample for a persona. Saves it to
+    personas/voices/<id>.wav and sets the persona's voice_clip field.
+    """
+    if pid not in pm.list_persona_ids():
+        return {"status": "error", "message": "Persona not found."}
+
+    fname = (file.filename or "").lower()
+    if not fname.endswith(".wav"):
+        return {"status": "error", "message": "Only .wav files are accepted."}
+
+    os.makedirs(pm.VOICES_DIR, exist_ok=True)
+    dest = os.path.join(pm.VOICES_DIR, f"{pid}.wav")
+
+    try:
+        content = await file.read()
+        with open(dest, "wb") as f:
+            f.write(content)
+    except Exception as e:
+        return {"status": "error", "message": f"Could not save file: {e}"}
+
+    # Update the persona's voice_clip field.
+    persona = pm.load_persona(pid)
+    persona["voice_clip"] = dest
+    pm.save_persona(pid, persona)
+
+    # If this is the active persona, point the TTS engine at the new clip.
+    if pid == pm.get_active_id():
+        reload_active_persona()
+
+    print(f"[Personas] Voice sample set for '{persona.get('name', pid)}'")
+    return {"status": "ok", "persona": pm.load_persona(pid)}
+
+
 @app.post("/clear-memory")
 async def clear_chat_memory():
     save_chat_memory([])
@@ -601,6 +637,12 @@ async def speak(data: SpeakRequest):
 
     text = data.text.strip()
     if not text:
+        return Response(status_code=204)
+
+    # If the active persona has no voice clip, skip TTS entirely.
+    active = pm.get_active_persona()
+    clip = active.get("voice_clip", "")
+    if not clip or not os.path.exists(clip):
         return Response(status_code=204)
 
     sentences = _re.split(r'(?<=[.!?])\s+(?=[A-Z])', text)
