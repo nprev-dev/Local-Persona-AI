@@ -1029,6 +1029,7 @@ function CharactersPage() {
 
   // Persist a character to its own persona file on the backend.
   const persistChar = (char) => {
+    if (!char || !char.id || char.id === 'undefined') return;
     dispatch({ type:'UPSERT_CHAR', v:char });
     fetch(API + "/personas/" + char.id, {
       method: "POST",
@@ -1080,21 +1081,35 @@ function CharactersPage() {
         });
         const data = await r.json();
         const realId = data.id;
-        const char = {
-          ...editing,
-          id: realId,
-          avatarInitial: editing.avatarInitial || editing.name.charAt(0).toUpperCase(),
+        if (!realId) { console.error("Create failed, no id:", data); setEditing(null); return; }
+
+        const payload = {
+          name:             editing.name,
+          avatar_color:     editing.avatarColor,
+          avatar_initial:   editing.avatarInitial || editing.name.charAt(0).toUpperCase(),
+          persona:          editing.persona || "",
+          base_prompt:      editing.systemPrompt || "",
+          traits:           editing._traits || [],
+          speech_style:     editing._speechStyle || [],
+          hard_constraints: editing._hardConstraints || [],
+          hard_rules:       editing._hardRules || [],
+          tts_enabled:      !!editing.ttsEnabled,
+          voice_style:      editing.voiceStyle || "neutral",
+          response_style:   editing.responseStyle || "balanced",
+          language:         editing._language || "English",
         };
-        // Save the full details to the new persona, then activate it.
+
+        // Save the full details to the new persona.
         await fetch(API + "/personas/" + realId, {
           method: "POST",
           headers: { "Content-Type": "application/json" },
-          body: JSON.stringify(charToPersonality(char)),
+          body: JSON.stringify(payload),
         });
+        // Activate it.
         await fetch(API + "/personas/" + realId + "/activate", { method: "POST" });
         // Re-sync the whole list from the backend so ids line up exactly.
         await reloadPersonas(dispatch, realId);
-      } catch (e) { /* ignore */ }
+      } catch (e) { console.error("saveChar create failed:", e); }
     } else {
       const char = {
         ...editing,

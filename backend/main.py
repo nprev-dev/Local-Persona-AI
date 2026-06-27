@@ -526,9 +526,35 @@ async def personas_get(pid: str):
         return Response(status_code=404)
 
 
+@app.post("/personas/new")
+async def personas_new(payload: dict):
+    """Create a fresh persona from a name. Body: { "name": "Jarvis" }
+
+    NOTE: This route MUST be defined before POST /personas/{pid}, otherwise
+    FastAPI matches '/personas/new' against '{pid}' (pid='new') and this never runs.
+    """
+    name = (payload.get("name") or "New Persona").strip()
+    base_id = pm.slugify(name)
+    pid = base_id
+    n = 2
+    while pid in pm.list_persona_ids():
+        pid = f"{base_id}_{n}"
+        n += 1
+
+    persona = pm._default_persona(pid)
+    persona["name"] = name
+    persona["avatar_initial"] = name[:1].upper()
+    pm.save_persona(pid, persona)
+    return {"status": "ok", "id": pid, "persona": pm.load_persona(pid)}
+
+
 @app.post("/personas/{pid}")
 async def personas_save(pid: str, update: PersonalityUpdate):
     """Create or update a persona by id. Preserves its voice_clip if it exists."""
+    # Guard against bogus ids (e.g. 'undefined' from a frontend race).
+    if not pid or pid in ("undefined", "null"):
+        return {"status": "error", "message": "Invalid persona id."}
+
     data = update.model_dump()
     try:
         existing = pm.load_persona(pid)
@@ -560,24 +586,6 @@ async def personas_delete(pid: str):
         return {"status": "error", "message": "Cannot delete (not found or last remaining persona)."}
     reload_active_persona()
     return {"status": "ok", "active": pm.get_active_id()}
-
-
-@app.post("/personas/new")
-async def personas_new(payload: dict):
-    """Create a fresh persona from a name. Body: { "name": "Jarvis" }"""
-    name = (payload.get("name") or "New Persona").strip()
-    base_id = pm.slugify(name)
-    pid = base_id
-    n = 2
-    while pid in pm.list_persona_ids():
-        pid = f"{base_id}_{n}"
-        n += 1
-
-    persona = pm._default_persona(pid)
-    persona["name"] = name
-    persona["avatar_initial"] = name[:1].upper()
-    pm.save_persona(pid, persona)
-    return {"status": "ok", "id": pid, "persona": pm.load_persona(pid)}
 
 
 @app.post("/personas/{pid}/voice")
