@@ -91,18 +91,19 @@ python install.py
 
 ## Setup
 
+## Setup
+
 1. Install Python 3.11 and Ollama (links above)
 2. Install dependencies + Ollama models:
-   ```
+```
    cd backend
    python install.py
-   ```
-3. Add your voice reference clip to the `backend/` folder and update `REFERENCE_CLIP` in `tts_engine.py`
-4. Edit `backend/personality.json` to define your character
-5. Run the app:
-   ```
+```
+3. Launch the app, then create or edit a character in the **Characters** tab — set its personality and upload a `.wav` voice sample right in the UI
+4. Run the app:
+```
    .\localpersona.exe
-   ```
+```
 
 ---
 
