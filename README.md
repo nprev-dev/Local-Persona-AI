@@ -91,8 +91,6 @@ python install.py
 
 ## Setup
 
-## Setup
-
 1. Install Python 3.11 and Ollama (links above)
 2. Install dependencies + Ollama models:
 ```
