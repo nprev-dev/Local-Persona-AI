@@ -8,11 +8,13 @@ Local-Persona-AI is a desktop application that lets you run a completely offline
 
 ## What It Does
 
+- **Multiple personas** — create as many characters as you want, each saved as its own file with its own personality, traits, rules, and voice. Switch between them or delete them right in the app.
 - **Custom personality** — define any character's speech style, traits, rules, and backstory via a simple JSON file or directly in the app. No coding required.
-- **In-app character editor** — edit your character's personality, traits, rules, voice style, and response style right in the UI. Changes save to `personality.json` and reload instantly, no restart needed.
+- **In-app character editor** — create, edit, and delete characters from the UI. Edit personality, traits, rules, voice style, and response style. Changes save to that persona's file and reload instantly, no restart needed.
+- **Per-persona voices** — every character can have its own voice. Upload a `.wav` sample in the character editor and that persona speaks in that voice. Switching personas switches the voice automatically.
 - **In-app model picker** — automatically detects the Ollama models installed on your machine and lets you switch between them from the UI.
 - **Voice cloning** — provide a short reference audio clip and the AI speaks in that voice using Chatterbox TTS with 7-emotion detection.
-- **Per-character voice toggle** — turn TTS on or off per character.
+- **Per-character voice toggle** — turn TTS on or off per character. Characters with no voice sample simply stay silent.
 - **Streaming chat** — token-by-token response streaming, ChatGPT-style, fully local via Ollama.
 - **Hybrid memory** — long-term memory system combining BM25 keyword search and FAISS vector search. The AI remembers facts about you across sessions.
 - **Document ingestion** — paste text or upload files to give the AI knowledge of anything you want.
@@ -45,18 +47,20 @@ The Tauri shell starts Ollama and the Python backend on launch, polls until the 
 
 ---
 
-## Current State (v0.3.0)
+## Current State (v0.4.0)
 
 This is an early working release. Everything below works but some things are still hardcoded or manual:
 
+- **Multiple personas** — create, switch between, and delete characters in the app. Each persona is stored as its own file in `backend/personas/`, with its own voice clip in `backend/personas/voices/`.
+- **Shared chat & memory across personas** — for now all personas share one chat history and memory. Switching a persona changes who's speaking and their voice, not the conversation. Per-persona separate chats are planned.
 - **Model selection in-app** — the app detects your installed Ollama models and lets you pick between them from the UI. The default chat model is `llama3.1:8b` and the memory judge is `phi3`.
 - **Model installation is manual** — you need to pull Ollama models yourself for the ones not included in `install.py`.
-- **Personality is fully editable in-app** — define and tweak your character from the UI or by editing `personality.json` directly. Either way changes apply without a restart.
-- **Voice model is manual** — bring your own reference `.wav` clip and set the path in `tts_engine.py`.
+- **Personality is fully editable in-app** — define and tweak any character from the UI or by editing its file directly. Either way changes apply without a restart.
+- **Per-persona voices, uploaded in-app** — give each character its own voice by uploading a `.wav` in the character editor. A persona with no voice sample stays silent.
 - **GUI installer included** — run install.py before first launch to install dependencies and pull Ollama models. Located in the backend/ folder.
 - **Single GPU only** — Ollama and Chatterbox share VRAM. On a 12GB card this means long TTS generation time. A dual GPU support setup is planned.
 - **Windows only** — tested on Windows 11. Linux/Mac untested.
-- **TTS quality depends on your reference clip** — longer and cleaner clips (45+ seconds) produce better results but might take longer to generate.
+- **TTS quality depends on your reference clip** — see the Voice Reference Tips below.
 - **Model quality affects personality** — smaller models may partially or fully ignore personality instructions and hard rules. llama3.1:8b is the minimum recommended, larger models follow character instructions significantly better.
 
 ---
@@ -102,9 +106,20 @@ python install.py
 
 ---
 
+## Voice Reference Tips
+ 
+Getting a good cloned voice depends a lot on the reference clip you provide. A few things learned the hard way:
+ 
+- **Use a neutral reference clip.** The voice clone picks up the *emotion* of your reference, not just the timbre. If your reference clip sounds excited or happy, every response comes out sounding excited — even sad ones. A calm, neutral clip gives the most flexible, natural result, because the emotion system can then shape it per response.
+- **Clean audio, no background music or noise.** Chatterbox copies whatever it hears.
+- **10–25 seconds is a good length.** Long enough to capture the voice, short enough to stay clean.
+- **On voice splitting / streaming speed.** The app generates speech sentence by sentence so audio can start playing sooner — it *feels* faster. The tradeoff is that each sentence is generated independently, so the model can't carry tone and pacing across sentence boundaries the way it would generating the whole reply at once. Slightly less consistent prosody, noticeably faster start. For most use the speed is worth it.
+
+---
+
 ## Customization
 
-You can edit your character two ways: directly in the app's character editor, or by hand in `backend/personality.json`. Both apply without a restart.
+You can edit your characters two ways: directly in the app's character editor, or by hand in their files. Both apply without a restart. Each persona lives in `backend/personas/<id>.json`, with its voice clip at `backend/personas/voices/<id>.wav`.
 
 ### Personality (`backend/personality.json`)
 
@@ -156,18 +171,18 @@ A lot was tried before arriving at the current stack. Documented here for anyone
 
 ## Roadmap
 
-- [ ] Voice switching UI
 - [ ] Second GPU support for dedicated TTS VRAM
 - [ ] Character avatar panel
 - [ ] Vision support
 - [ ] Linux support
 - [ ] API key support (OpenAI-compatible backends as alternative to Ollama)
 - [ ] Saving and switching between named chats
-- [ ] Personas stored in separate files (one file per character, for true multi-character switching)
 - [ ] Cross-chat persistent memory
 - [ ] Computer access (do things directly on your pc if given permission)
 - [ ] Cleaner install.py
-- [ ] Persona locked chats (one persona locked for one desired chat)
+- [ ] Persona-locked chats (one persona locked to one desired chat)
+- [ ] Stronger personality adherence (next release — make smaller models hold character better)
+
 ---
 
 ## Contact
