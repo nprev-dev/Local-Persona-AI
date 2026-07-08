@@ -1,8 +1,8 @@
 memory_store.db
 memory.json
 personality.json
-voices/
-__pycache__/
 aemeath_ref.wav
-personality.json
-personas/
+__pycache__/
+active.json
+personas/*.json
+personas/voices/uploads/
