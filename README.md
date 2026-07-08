@@ -62,6 +62,7 @@ This is an early working release. Everything below works but some things are sti
 - **Windows only** — tested on Windows 11. Linux/Mac untested.
 - **TTS quality depends on your reference clip** — see the Voice Reference Tips below.
 - **Model quality affects personality** — smaller models may partially or fully ignore personality instructions and hard rules. llama3.1:8b is the minimum recommended, larger models follow character instructions significantly better.
+- **Aemeath ships by default** — the installer includes Aemeath from Wuthering Waves as a default persona, complete with her voice reference clip. Like any other persona, she can be deleted at any time along with her voice clip.
 
 ---
 
