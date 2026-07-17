@@ -194,3 +194,7 @@ Feel free to reach out if you're building something similar, ran into the same w
 ---
 
 *Built entirely locally. No cloud. No telemetry. Your conversations stay on your machine.*
+
+## License
+
+This project is licensed under the [MIT License](LICENSE) — you're free to use, modify, and distribute it, as long as you keep the copyright notice and give credit to **nprev-dev**.
