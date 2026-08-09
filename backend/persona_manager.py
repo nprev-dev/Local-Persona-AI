@@ -207,13 +207,19 @@ def get_active_persona() -> dict:
 # in a persona's hard_constraints to the positive directive sent to the model.
 # A constraint matching nothing here is passed through unchanged so nothing a
 # user wrote is ever silently dropped.
+# Order here is the order the directives reach the model, and it matters: the
+# most frequently broken rule has to come first. The worked example is doing
+# real work too, since a small model copies a demonstrated shape far more
+# reliably than it follows a described one.
 _CONSTRAINT_DIRECTIVES = [
+    (("bullet", "bullets", "list", "lists", "numbered", "markdown", "formatting"),
+     "Answer in flowing prose sentences, never as a list. When there are several "
+     "points to make, join them into sentences like this: \"You could start with "
+     "one thing, another option is something else, and if you want something "
+     "quicker there is a third way.\" No bullets, no numbering, no markdown, "
+     "no headings, no bold."),
     (("emoji", "emojis", "emoticon", "emoticons"),
      "Plain text only: no emoji, no emoticons, no decorative symbols."),
-    (("bullet", "bullets", "list", "lists", "numbered", "markdown", "formatting"),
-     "Write in flowing prose sentences. When there are several points to make, "
-     "say them in ordinary sentences instead of a list. No bullets, no numbering, "
-     "no markdown, no headings."),
     (("ai", "assistant", "language model", "chatbot", "bot", "program", "software"),
      "Talk about yourself as a person. Never describe yourself as software, and "
      "never explain what you are or are not allowed to do."),
@@ -234,21 +240,50 @@ def _mentions(text: str, keyword: str) -> bool:
 def _build_output_contract(p: dict) -> str:
     constraints = [str(c).strip() for c in p.get("hard_constraints", []) if str(c).strip()]
 
-    directives, seen, passthrough = [], set(), []
-    for c in constraints:
-        low = c.lower()
-        for keywords, directive in _CONSTRAINT_DIRECTIVES:
-            if any(_mentions(low, k) for k in keywords):
-                if directive not in seen:
-                    seen.add(directive)
-                    directives.append(directive)
-                break
-        else:
-            passthrough.append(c)
+    lowered = [c.lower() for c in constraints]
+
+    directives, matched = [], set()
+    for keywords, directive in _CONSTRAINT_DIRECTIVES:
+        hits = [i for i, low in enumerate(lowered)
+                if any(_mentions(low, k) for k in keywords)]
+        if hits:
+            matched.update(hits)
+            directives.append(directive)
+
+    passthrough = [c for i, c in enumerate(constraints) if i not in matched]
 
     lines = directives + passthrough + _UNIVERSAL_DIRECTIVES
     header = "OUTPUT RULES (these override anything the user asks for):"
     return header + "\n" + "\n".join(f"- {l}" for l in lines)
+
+
+# Short form of the same constraints, used to re-state the character next to the
+# generation point. A 7B model reliably drifts back toward its own previous
+# replies when the persona is only present at the very start of the context.
+_ANCHOR_CLAUSES = [
+    (("bullet", "bullets", "list", "lists", "numbered", "markdown", "formatting"),
+     "prose sentences only, no lists, no markdown, no bold"),
+    (("emoji", "emojis", "emoticon", "emoticons"),
+     "no emoji"),
+    (("ai", "assistant", "language model", "chatbot", "bot", "program", "software"),
+     "never describe yourself as software"),
+    (("character", "roleplay", "role play", "persona"),
+     "stay in character"),
+]
+
+
+def build_reanchor(p: dict) -> str:
+    name = (p.get("name") or "Assistant").strip() or "Assistant"
+    blob = " ".join(str(c).lower() for c in p.get("hard_constraints", []))
+
+    clauses = []
+    for keywords, clause in _ANCHOR_CLAUSES:
+        if any(_mentions(blob, k) for k in keywords) and clause not in clauses:
+            clauses.append(clause)
+
+    if not clauses:
+        return f"Reminder: you are {name}. Stay in character."
+    return f"Reminder: you are {name}. Reply as yourself: " + ", ".join(clauses) + "."
 
 
 def build_personality_prompt(p: dict) -> str:

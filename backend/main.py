@@ -1,3 +1,14 @@
+# Console output has to survive non-ASCII text such as a persona named in
+# Japanese or Cyrillic. On Windows stdout defaults to cp1252 and raises
+# UnicodeEncodeError on any character that codepage lacks, which kills startup.
+import sys
+
+for _stream in (sys.stdout, sys.stderr):
+    try:
+        _stream.reconfigure(encoding="utf-8", errors="replace")
+    except Exception:
+        pass
+
 from fastapi import FastAPI, UploadFile, File
 from fastapi.responses import HTMLResponse, Response, StreamingResponse
 from openai import OpenAI
@@ -58,15 +69,17 @@ def _apply_active_voice():
 
 def reload_active_persona():
     """Refresh the cached active persona + system prompt + voice."""
-    global PERSONALITY, PERSONALITY_PROMPT
+    global PERSONALITY, PERSONALITY_PROMPT, PERSONALITY_ANCHOR
     PERSONALITY        = pm.get_active_persona()
     PERSONALITY_PROMPT = pm.build_personality_prompt(PERSONALITY)
+    PERSONALITY_ANCHOR = pm.build_reanchor(PERSONALITY)
     _apply_active_voice()
     return PERSONALITY
 
 
 PERSONALITY        = pm.get_active_persona()
 PERSONALITY_PROMPT = pm.build_personality_prompt(PERSONALITY)
+PERSONALITY_ANCHOR = pm.build_reanchor(PERSONALITY)
 _apply_active_voice()
 print(f"[Personas] Active persona: '{PERSONALITY.get('name', 'Assistant')}'")
 
@@ -100,6 +113,54 @@ class PersonalityUpdate(BaseModel):
 def strip_thinking(text: str) -> str:
     cleaned = re.sub(r"<think>.*?</think>", "", text, flags=re.DOTALL)
     return cleaned.strip()
+
+
+def _pending_tag_len(buffer: str, tag: str) -> int:
+    """Length of the longest suffix of buffer that could still grow into tag."""
+    for n in range(min(len(buffer), len(tag) - 1), 0, -1):
+        if buffer.endswith(tag[:n]):
+            return n
+    return 0
+
+
+def strip_thinking_stream(tokens):
+    """
+    Yield only the text outside <think>...</think>.
+
+    Ollama 0.32 returns reasoning in a separate 'thinking' field, so this covers
+    the other case: models whose reasoning arrives inline in the content stream.
+    A tag can be split across token boundaries, so partial tags are held back
+    rather than emitted.
+    """
+    OPEN, CLOSE = "<think>", "</think>"
+    buffer, inside = "", False
+
+    for token in tokens:
+        buffer += token
+        while buffer:
+            if not inside:
+                idx = buffer.find(OPEN)
+                if idx == -1:
+                    held = _pending_tag_len(buffer, OPEN)
+                    emit, buffer = buffer[:len(buffer) - held], buffer[len(buffer) - held:]
+                    if emit:
+                        yield emit
+                    break
+                emit, buffer = buffer[:idx], buffer[idx + len(OPEN):]
+                if emit:
+                    yield emit
+                inside = True
+            else:
+                idx = buffer.find(CLOSE)
+                if idx == -1:
+                    held = _pending_tag_len(buffer, CLOSE)
+                    buffer = buffer[len(buffer) - held:] if held else ""
+                    break
+                buffer = buffer[idx + len(CLOSE):]
+                inside = False
+
+    if buffer and not inside:
+        yield buffer
 
 
 # ── Ollama API helpers ─────────────────────────────────────────────────────────
@@ -245,7 +306,16 @@ def build_chat_messages(user_input: str, recent_chat: list, relevant_memories: l
         if role in ("user", "assistant") and content:
             messages.append({"role": role, "content": content})
 
-    messages.append({"role": "user", "content": user_input})
+    # The re-anchor rides on the user turn rather than a second system message.
+    # Templates disagree about mid-conversation system messages: qwen2.5 honours
+    # one, llama3.1 ignores it, and mistral has no system branch at all. Every
+    # template renders the final user turn, so this placement reaches all of them.
+    # It is never written to chat history, only to the outgoing prompt.
+    if user_input:
+        messages.append({"role": "user",
+                         "content": f"{user_input}\n\n({PERSONALITY_ANCHOR})"})
+    else:
+        messages.append({"role": "user", "content": PERSONALITY_ANCHOR})
     return messages
 
 
@@ -352,7 +422,8 @@ async def chat(data: ChatRequest):
         # Run the blocking Ollama stream in a worker thread.
         def produce():
             try:
-                for token in ask_ollama_stream(messages, model=CURRENT_MODEL):
+                raw = ask_ollama_stream(messages, model=CURRENT_MODEL)
+                for token in strip_thinking_stream(raw):
                     full_reply_box["text"] += token
                     loop.call_soon_threadsafe(queue.put_nowait, token)
             finally:

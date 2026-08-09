@@ -33,4 +33,7 @@ __pycache__/
 backend/memory_store.db
 backend/memory.json
 
+# Local eval harness (never shipped)
+tests/
+
 .claude/
