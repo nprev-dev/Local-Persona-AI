@@ -237,6 +237,37 @@ def _mentions(text: str, keyword: str) -> bool:
     return re.search(rf"\b{re.escape(keyword)}\b", text) is not None
 
 
+# 'balanced' and 'English' are the defaults every existing persona already carries,
+# so they deliberately add nothing to the prompt: current behaviour is what those
+# values already mean, and emitting text for them would change every persona.
+# "detailed" has to push hard. A milder wording measured the same as balanced,
+# because the no-padding rule in the output contract cancels it out.
+_RESPONSE_STYLE_LINES = {
+    "concise":  "Keep replies short, usually a sentence or two.",
+    "detailed": "Go into depth: explain the reasoning behind what you say and add "
+                "context and examples, rather than answering in a line or two.",
+}
+
+
+def _preference_lines(p: dict) -> list:
+    lines = []
+
+    style = str(p.get("response_style") or "").strip().lower()
+    if style in _RESPONSE_STYLE_LINES:
+        lines.append(_RESPONSE_STYLE_LINES[style])
+
+    language = str(p.get("language") or "").strip()
+    if language and language.lower() != "english":
+        lines.append(f"Always reply in {language}, whatever language the user writes in.")
+
+    return lines
+
+
+def _persona_language(p: dict) -> str:
+    language = str(p.get("language") or "").strip()
+    return "" if language.lower() in ("", "english") else language
+
+
 def _build_output_contract(p: dict) -> str:
     constraints = [str(c).strip() for c in p.get("hard_constraints", []) if str(c).strip()]
 
@@ -277,6 +308,13 @@ def build_reanchor(p: dict) -> str:
     blob = " ".join(str(c).lower() for c in p.get("hard_constraints", []))
 
     clauses = []
+
+    # Language leads: a small model drifts back to English mid-conversation long
+    # before it forgets any of the formatting rules.
+    language = _persona_language(p)
+    if language:
+        clauses.append(f"reply in {language}")
+
     for keywords, clause in _ANCHOR_CLAUSES:
         if any(_mentions(blob, k) for k in keywords) and clause not in clauses:
             clauses.append(clause)
@@ -304,6 +342,7 @@ def build_personality_prompt(p: dict) -> str:
         sections.append("You are " + ", ".join(traits) + ".")
 
     style = [str(s).strip() for s in p.get("speech_style", []) if str(s).strip()]
+    style += _preference_lines(p)
     if style:
         sections.append("How you talk:\n" + "\n".join(f"- {s}" for s in style))
 

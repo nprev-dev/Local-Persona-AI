@@ -18,7 +18,7 @@ import re
 import os
 from pydantic import BaseModel
 from tts_engine import synthesize, synthesize_sentence, set_reference_clip
-from llm_config import CHAT_OPTIONS, CHAT_MAX_TOKENS
+from llm_config import CHAT_OPTIONS, CHAT_MAX_TOKENS, max_tokens_for
 
 from memory_engine import (
     init_memory_db,
@@ -173,9 +173,11 @@ def _chat_options(max_tokens: int) -> dict:
     return options
 
 
-def ask_ollama(messages: list, model: str = CHAT_MODEL, max_tokens: int = CHAT_MAX_TOKENS) -> str:
+def ask_ollama(messages: list, model: str = CHAT_MODEL, max_tokens: int = None) -> str:
     if model is None:
         model = CURRENT_MODEL
+    if max_tokens is None:
+        max_tokens = max_tokens_for(model)
     response = requests.post(
         "http://localhost:11434/api/chat",
         json={
@@ -190,10 +192,12 @@ def ask_ollama(messages: list, model: str = CHAT_MODEL, max_tokens: int = CHAT_M
     raw = response.json()["message"]["content"]
     return strip_thinking(raw)
 
-def ask_ollama_stream(messages: list, model: str = CHAT_MODEL, max_tokens: int = CHAT_MAX_TOKENS):
+def ask_ollama_stream(messages: list, model: str = CHAT_MODEL, max_tokens: int = None):
     """Generator that yields tokens as they stream from Ollama."""
     if model is None:
         model = CURRENT_MODEL
+    if max_tokens is None:
+        max_tokens = max_tokens_for(model)
     response = requests.post(
         "http://localhost:11434/api/chat",
         json={
