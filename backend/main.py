@@ -7,6 +7,7 @@ import re
 import os
 from pydantic import BaseModel
 from tts_engine import synthesize, synthesize_sentence, set_reference_clip
+from llm_config import CHAT_OPTIONS, CHAT_MAX_TOKENS
 
 from memory_engine import (
     init_memory_db,
@@ -105,7 +106,13 @@ def strip_thinking(text: str) -> str:
 # ask_ollama uses /api/chat (messages array) — supports proper system messages.
 # _ask_generate uses /api/generate (raw prompt) — used only by the memory judge.
 
-def ask_ollama(messages: list, model: str = CHAT_MODEL, max_tokens: int = 150) -> str:
+def _chat_options(max_tokens: int) -> dict:
+    options = dict(CHAT_OPTIONS)
+    options["num_predict"] = max_tokens
+    return options
+
+
+def ask_ollama(messages: list, model: str = CHAT_MODEL, max_tokens: int = CHAT_MAX_TOKENS) -> str:
     if model is None:
         model = CURRENT_MODEL
     response = requests.post(
@@ -114,7 +121,7 @@ def ask_ollama(messages: list, model: str = CHAT_MODEL, max_tokens: int = 150) -
             "model":    model,
             "messages": messages,
             "stream":   False,
-            "options":  {"num_predict": max_tokens},
+            "options":  _chat_options(max_tokens),
             "keep_alive": 0
         }
     )
@@ -122,7 +129,7 @@ def ask_ollama(messages: list, model: str = CHAT_MODEL, max_tokens: int = 150) -
     raw = response.json()["message"]["content"]
     return strip_thinking(raw)
 
-def ask_ollama_stream(messages: list, model: str = CHAT_MODEL, max_tokens: int = 150):
+def ask_ollama_stream(messages: list, model: str = CHAT_MODEL, max_tokens: int = CHAT_MAX_TOKENS):
     """Generator that yields tokens as they stream from Ollama."""
     if model is None:
         model = CURRENT_MODEL
@@ -132,7 +139,7 @@ def ask_ollama_stream(messages: list, model: str = CHAT_MODEL, max_tokens: int =
             "model":      model,
             "messages":   messages,
             "stream":     True,
-            "options":    {"num_predict": max_tokens},
+            "options":    _chat_options(max_tokens),
             "keep_alive": 0
         },
         stream=True
