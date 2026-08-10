@@ -18,7 +18,13 @@ import re
 import os
 from pydantic import BaseModel
 from tts_engine import synthesize, synthesize_sentence, set_reference_clip
-from llm_config import CHAT_OPTIONS, CHAT_MAX_TOKENS, max_tokens_for
+from llm_config import (
+    CHAT_OPTIONS,
+    CHAT_MAX_TOKENS,
+    KEEP_ALIVE_UNLOAD,
+    max_tokens_for,
+    keep_alive_for,
+)
 
 from memory_engine import (
     init_memory_db,
@@ -173,7 +179,8 @@ def _chat_options(max_tokens: int) -> dict:
     return options
 
 
-def ask_ollama(messages: list, model: str = CHAT_MODEL, max_tokens: int = None) -> str:
+def ask_ollama(messages: list, model: str = CHAT_MODEL, max_tokens: int = None,
+               keep_alive=KEEP_ALIVE_UNLOAD) -> str:
     if model is None:
         model = CURRENT_MODEL
     if max_tokens is None:
@@ -185,14 +192,15 @@ def ask_ollama(messages: list, model: str = CHAT_MODEL, max_tokens: int = None) 
             "messages": messages,
             "stream":   False,
             "options":  _chat_options(max_tokens),
-            "keep_alive": 0
+            "keep_alive": keep_alive
         }
     )
     response.raise_for_status()
     raw = response.json()["message"]["content"]
     return strip_thinking(raw)
 
-def ask_ollama_stream(messages: list, model: str = CHAT_MODEL, max_tokens: int = None):
+def ask_ollama_stream(messages: list, model: str = CHAT_MODEL, max_tokens: int = None,
+                      keep_alive=KEEP_ALIVE_UNLOAD):
     """Generator that yields tokens as they stream from Ollama."""
     if model is None:
         model = CURRENT_MODEL
@@ -205,7 +213,7 @@ def ask_ollama_stream(messages: list, model: str = CHAT_MODEL, max_tokens: int =
             "messages":   messages,
             "stream":     True,
             "options":    _chat_options(max_tokens),
-            "keep_alive": 0
+            "keep_alive": keep_alive
         },
         stream=True
     )
@@ -223,29 +231,44 @@ def ask_ollama_stream(messages: list, model: str = CHAT_MODEL, max_tokens: int =
         except json.JSONDecodeError:
             continue
 
-def unload_ollama():
-    """Force Ollama to release VRAM after responding."""
+def unload_model(model: str):
+    """Drop a model from VRAM immediately. Used when switching models."""
+    if not model:
+        return
     try:
         requests.post(
             "http://localhost:11434/api/generate",
-            json={"model": CURRENT_MODEL, "keep_alive": 0, "prompt": ""},
+            json={"model": model, "keep_alive": 0, "prompt": ""},
             timeout=5
         )
     except Exception:
         pass
+
+
+def tts_will_speak() -> bool:
+    """Whether the active persona actually produces speech for a reply."""
+    persona = pm.get_active_persona()
+    if not persona.get("tts_enabled", True):
+        return False
+    clip = persona.get("voice_clip", "")
+    return bool(clip) and os.path.exists(clip)
 
 def _ask_generate(prompt: str, model: str = MEMORY_MODEL, max_tokens: int = 180) -> str:
     """
     Raw prompt → response via /api/generate.
     Used internally by the memory judge which builds its own flat prompt.
     """
+    # The judge runs once per message and is not on screen, so it releases VRAM
+    # straight away. Holding it would cost 3.8GB that Chatterbox needs, and the
+    # residency budget for the chat model assumes only TTS competes with it.
     response = requests.post(
         "http://localhost:11434/api/generate",
         json={
             "model":   model,
             "prompt":  prompt,
             "stream":  False,
-            "options": {"num_predict": max_tokens}
+            "options": {"num_predict": max_tokens},
+            "keep_alive": KEEP_ALIVE_UNLOAD
         }
     )
     response.raise_for_status()
@@ -417,6 +440,7 @@ async def chat(data: ChatRequest):
     chat_memory       = load_chat_memory()
     relevant_memories = search_memory(user_input, limit=6)
     messages          = build_chat_messages(user_input, chat_memory, relevant_memories)
+    keep_alive        = keep_alive_for(CURRENT_MODEL, tts_will_speak())
 
     async def response_stream():
         loop  = asyncio.get_event_loop()
@@ -426,7 +450,8 @@ async def chat(data: ChatRequest):
         # Run the blocking Ollama stream in a worker thread.
         def produce():
             try:
-                raw = ask_ollama_stream(messages, model=CURRENT_MODEL)
+                raw = ask_ollama_stream(messages, model=CURRENT_MODEL,
+                                        keep_alive=keep_alive)
                 for token in strip_thinking_stream(raw):
                     full_reply_box["text"] += token
                     loop.call_soon_threadsafe(queue.put_nowait, token)
@@ -448,7 +473,6 @@ async def chat(data: ChatRequest):
         chat_memory.append({"role": "user",      "content": user_input})
         chat_memory.append({"role": "assistant", "content": full_reply})
         save_chat_memory(chat_memory)
-        unload_ollama()
 
         # Save memory
         new_memory   = extract_memory(user_input, full_reply)
@@ -533,8 +557,12 @@ async def get_settings():
 @app.post("/settings")
 async def update_settings(settings: dict):
     global CURRENT_MODEL
-    if "model" in settings:
+    if "model" in settings and settings["model"] != CURRENT_MODEL:
+        previous = CURRENT_MODEL
         CURRENT_MODEL = settings["model"]
+        # The old model can now sit in VRAM unused for the rest of its keep_alive
+        # window, so evict it rather than starve the new one.
+        unload_model(previous)
     return {"status": "ok", "model": CURRENT_MODEL}
 
 
