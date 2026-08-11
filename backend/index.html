@@ -488,6 +488,29 @@ input[type=range]{accent-color:var(--accent);height:20px;cursor:pointer}
 
 .field-hint{font-size:11.5px;color:var(--text-3);margin-top:6px;line-height:1.5}
 
+/* List editor — traits, speech style, rules, absolute rules */
+.list-editor{display:flex;flex-direction:column;gap:6px}
+.list-row{display:flex;align-items:center;gap:6px}
+.list-row .text-input{flex:1;min-width:0}
+.list-row .icon-btn{opacity:0;transition:opacity .12s var(--ease),background .12s var(--ease),color .12s var(--ease)}
+.list-row:hover .icon-btn,.list-row:focus-within .icon-btn{opacity:1}
+.list-empty{
+  font-size:12px;color:var(--text-3);line-height:1.5;
+  padding:10px 12px;border:1px dashed var(--border);border-radius:var(--r-sm);
+}
+.list-add{display:flex;align-items:center;gap:6px;margin-top:2px}
+.list-add .text-input{flex:1;min-width:0}
+.list-add-btn{
+  display:inline-flex;align-items:center;justify-content:center;gap:6px;
+  height:34px;padding:0 12px;border-radius:var(--r-sm);
+  border:1px solid var(--border);background:var(--surface-2);color:var(--text-2);
+  transition:background .12s var(--ease),border-color .12s var(--ease),color .12s var(--ease);
+  flex-shrink:0;
+}
+.list-add-btn:hover:not(:disabled){background:var(--surface-3);border-color:var(--border-strong);color:var(--text-1)}
+.list-add-btn:disabled{opacity:.4;cursor:default}
+.list-count{font-size:11px;color:var(--text-3);margin-left:auto;font-variant-numeric:tabular-nums}
+
 .select{
   appearance:none;-webkit-appearance:none;
   padding:7px 30px 7px 11px;border-radius:var(--r-sm);
@@ -1496,7 +1519,12 @@ function CharactersPage() {
     return () => document.removeEventListener('mousedown', handler);
   }, [dropOpen]);
 
-  const startNew = () => {
+  // Seeded from the backend so a new character starts with the same rules the
+  // backend would give it. Without this the editor would show empty lists and
+  // then save those over the defaults.
+  const startNew = async () => {
+    let d = {};
+    try { d = await (await fetch(API + "/persona-defaults")).json(); } catch (e) { d = {}; }
     setEditing({
       id: uid(),
       name: '',
@@ -1507,7 +1535,12 @@ function CharactersPage() {
       ttsEnabled: false,
       visualPanel: false,
       voiceStyle: 'neutral',
-      responseStyle: 'balanced',
+      responseStyle: d.response_style || 'balanced',
+      _traits:          d.traits           || [],
+      _speechStyle:     d.speech_style     || [],
+      _hardRules:       d.hard_rules       || [],
+      _hardConstraints: d.hard_constraints || [],
+      _language:        d.language         || 'English',
     });
     setDropOpen(false);
   };
@@ -1533,12 +1566,16 @@ function CharactersPage() {
         const realId = data.id;
         if (!realId) { console.error("Create failed, no id:", data); setEditing(null); return; }
 
+        // The backend already filled in a name-derived prompt and description on
+        // create; fall back to those rather than saving blanks over them.
+        const created = data.persona || {};
+
         const payload = {
           name:             editing.name,
           avatar_color:     editing.avatarColor,
           avatar_initial:   editing.avatarInitial || editing.name.charAt(0).toUpperCase(),
-          persona:          editing.persona || "",
-          base_prompt:      editing.systemPrompt || "",
+          persona:          editing.persona || created.persona || "",
+          base_prompt:      editing.systemPrompt || created.base_prompt || "",
           traits:           editing._traits || [],
           speech_style:     editing._speechStyle || [],
           hard_constraints: editing._hardConstraints || [],
@@ -1700,6 +1737,18 @@ function CharactersPage() {
             <div className="label-caps">System Prompt</div>
             <div className="mono-block">
               {activeChar.systemPrompt || <span style={{ color:'var(--text-3)' }}>No system prompt set.</span>}
+            </div>
+          </div>
+
+          {/* What is actually holding the character together */}
+          <div className="card-sec">
+            <div className="label-caps">Absolute Rules</div>
+            <div className="mono-block">
+              {(activeChar._hardConstraints && activeChar._hardConstraints.length)
+                ? activeChar._hardConstraints.join('\n')
+                : <span style={{ color:'var(--text-3)' }}>
+                    None set. Smaller models will drift out of character without these.
+                  </span>}
             </div>
           </div>
 
@@ -1946,6 +1995,58 @@ function CharacterEditor({ char, onChange, onSave, onCancel, isNew }) {
           </div>
         </Section>
 
+        {/* Personality section — these drive how strongly the character holds up */}
+        <Section title="Personality">
+          <div style={{ display:'flex', flexDirection:'column', gap:18 }}>
+
+            <div>
+              <label className="label-caps" style={{ marginBottom: 6 }}>Traits</label>
+              <ListEditor
+                items={char._traits}
+                onChange={v => set('_traits', v)}
+                placeholder="warm and caring"
+                emptyHint="No traits yet. These describe what the character is like."
+              />
+            </div>
+
+            <div>
+              <label className="label-caps" style={{ marginBottom: 6 }}>Speech Style</label>
+              <ListEditor
+                items={char._speechStyle}
+                onChange={v => set('_speechStyle', v)}
+                placeholder="Speak like you're talking to a friend"
+                emptyHint="No speech style yet. This shapes how the character talks."
+              />
+            </div>
+
+            <div>
+              <label className="label-caps" style={{ marginBottom: 6 }}>Rules</label>
+              <ListEditor
+                items={char._hardRules}
+                onChange={v => set('_hardRules', v)}
+                placeholder="Never say you cannot do something without trying first"
+                emptyHint="No rules yet. Things the character should always do."
+              />
+            </div>
+
+            <div>
+              <label className="label-caps" style={{ marginBottom: 6 }}>Absolute Rules</label>
+              <ListEditor
+                items={char._hardConstraints}
+                onChange={v => set('_hardConstraints', v)}
+                placeholder="NEVER use emojis."
+                emptyHint="No absolute rules. Without these, smaller models drift out of character."
+              />
+              <div className="field-hint">
+                The strongest rules, obeyed even when the user asks otherwise. These are
+                what keep 4B-7B models in character, so clearing them will noticeably
+                weaken smaller models.
+              </div>
+            </div>
+
+          </div>
+        </Section>
+
         {/* Settings section */}
         <Section title="Settings">
           <div style={{ display:'flex', flexDirection:'column', gap:14 }}>
@@ -2083,6 +2184,67 @@ function SelectInput({ value, options, onChange }) {
     <select className="select" value={value} onChange={e => onChange(e.target.value)}>
       {options.map(o => <option key={o} value={o}>{o.charAt(0).toUpperCase()+o.slice(1)}</option>)}
     </select>
+  );
+}
+
+// Edits a list of short strings: the character's traits, speech style and rules.
+// Items are edited in place; blank ones are dropped rather than stored, since an
+// empty rule reaches the model as a stray bullet.
+function ListEditor({ items, onChange, placeholder, addLabel, emptyHint, maxLen = 400 }) {
+  const [draft, setDraft] = useState('');
+  const list = Array.isArray(items) ? items : [];
+
+  const commit = (next) => onChange(next.map(s => s.slice(0, maxLen)));
+
+  const addDraft = () => {
+    const v = draft.trim();
+    if (!v) return;
+    commit([...list, v]);
+    setDraft('');
+  };
+
+  return (
+    <div className="list-editor">
+      {list.length === 0 && <div className="list-empty">{emptyHint}</div>}
+
+      {list.map((item, i) => (
+        <div className="list-row" key={i}>
+          <input
+            className="text-input"
+            value={item}
+            maxLength={maxLen}
+            onChange={e => commit(list.map((v, j) => j === i ? e.target.value : v))}
+            onBlur={() => { if (!item.trim()) commit(list.filter((_, j) => j !== i)); }}
+          />
+          <button
+            className="icon-btn danger"
+            title="Remove"
+            onClick={() => commit(list.filter((_, j) => j !== i))}
+          >
+            <i className="ti ti-x" />
+          </button>
+        </div>
+      ))}
+
+      <div className="list-add">
+        <input
+          className="text-input"
+          value={draft}
+          maxLength={maxLen}
+          placeholder={placeholder}
+          onChange={e => setDraft(e.target.value)}
+          onKeyDown={e => { if (e.key === 'Enter') { e.preventDefault(); addDraft(); } }}
+        />
+        <button className="list-add-btn" onClick={addDraft} disabled={!draft.trim()}>
+          <i className="ti ti-plus" />
+          {addLabel || 'Add'}
+        </button>
+      </div>
+
+      {list.length > 0 && (
+        <div className="list-count">{list.length} {list.length === 1 ? 'entry' : 'entries'}</div>
+      )}
+    </div>
   );
 }
 

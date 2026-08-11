@@ -422,10 +422,29 @@ def extract_memory(user_input, assistant_reply):
 
 # ── Routes ─────────────────────────────────────────────────────────────────────
 
+def _ui_file() -> str:
+    """
+    Prefer the precompiled page built by tools/build_ui.cjs, which spares the
+    browser 3.14MB of babel.min.js and the JSX transform on every launch.
+
+    It is only used while it is newer than index.html. If someone edits the
+    source and forgets to rebuild, the source is served instead, so a stale UI
+    can never reach the user.
+    """
+    built = "index.prod.html"
+    source = "index.html"
+    try:
+        if os.path.getmtime(built) >= os.path.getmtime(source):
+            return built
+    except OSError:
+        pass
+    return source
+
+
 @app.get("/", response_class=HTMLResponse)
 async def home():
     try:
-        with open("index.html", "r", encoding="utf-8") as f:
+        with open(_ui_file(), "r", encoding="utf-8") as f:
             return f.read()
     except FileNotFoundError:
         return "<h1>index.html not found</h1>"
@@ -644,6 +663,16 @@ async def update_personality(update: PersonalityUpdate):
 
 # ── Multi-persona endpoints ──────────────────────────────────────────────────
 
+@app.get("/persona-defaults")
+async def persona_defaults():
+    """
+    The starting field values for a new character. The editor reads these so it
+    shows the same rules the backend would apply, instead of presenting empty
+    lists and then saving them over the defaults.
+    """
+    return pm._default_persona("new")
+
+
 @app.get("/personas")
 async def personas_list():
     return {"personas": pm.list_personas_summary(), "active": pm.get_active_id()}
@@ -675,6 +704,11 @@ async def personas_new(payload: dict):
     persona = pm._default_persona(pid)
     persona["name"] = name
     persona["avatar_initial"] = name[:1].upper()
+    # Without this the character would claim to be someone else: the default
+    # prompt describes a generic speaker, not the name the user just chose.
+    persona["base_prompt"] = (
+        f"You are {name}. You speak naturally, like a real person talking to a friend."
+    )
     pm.save_persona(pid, persona)
     return {"status": "ok", "id": pid, "persona": pm.load_persona(pid)}
 
