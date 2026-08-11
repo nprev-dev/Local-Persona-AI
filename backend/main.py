@@ -437,8 +437,16 @@ async def chat(data: ChatRequest):
 
     user_input = data.user_input.strip()
 
+    # Memory search and the memory judge are blocking and take seconds. Run on
+    # the event loop they freeze the whole server, so every other request --
+    # including a second message the user is now free to send while the judge is
+    # still working -- stalls behind them.
+    outer_loop = asyncio.get_event_loop()
+
     chat_memory       = load_chat_memory()
-    relevant_memories = search_memory(user_input, limit=6)
+    relevant_memories = await outer_loop.run_in_executor(
+        None, lambda: search_memory(user_input, limit=6)
+    )
     messages          = build_chat_messages(user_input, chat_memory, relevant_memories)
     keep_alive        = keep_alive_for(CURRENT_MODEL, tts_will_speak())
 
@@ -474,22 +482,35 @@ async def chat(data: ChatRequest):
         chat_memory.append({"role": "assistant", "content": full_reply})
         save_chat_memory(chat_memory)
 
-        # Save memory
-        new_memory   = extract_memory(user_input, full_reply)
-        memory_saved = False
-        if new_memory:
-            memory_saved = add_memory(
-                category   = new_memory["category"],
-                content    = new_memory["content"],
-                importance = new_memory["importance"],
-                source     = "chat"
-            )
-
-        counts = memory_count()
+        # The reply is final here, so close it out now. The memory judge runs
+        # afterwards: it loads a second model and takes seconds, and the client
+        # waits on this frame before it starts speaking.
         yield json.dumps({
             "done":         True,
-            "memory_saved": memory_saved,
-            "memory_count": counts
+            "memory_count": memory_count()
+        }) + "\n"
+
+        # Save memory. This calls a second model and takes seconds, so it runs
+        # in a worker thread rather than on the event loop.
+        new_memory   = await loop.run_in_executor(
+            None, extract_memory, user_input, full_reply
+        )
+        memory_saved = False
+        if new_memory:
+            memory_saved = await loop.run_in_executor(
+                None,
+                lambda: add_memory(
+                    category   = new_memory["category"],
+                    content    = new_memory["content"],
+                    importance = new_memory["importance"],
+                    source     = "chat"
+                )
+            )
+
+        yield json.dumps({
+            "memory_update": True,
+            "memory_saved":  memory_saved,
+            "memory_count":  memory_count()
         }) + "\n"
 
     return StreamingResponse(response_stream(), media_type="application/x-ndjson")

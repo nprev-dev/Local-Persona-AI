@@ -830,8 +830,10 @@ async function* chatStream(userInput, signal, onDone) {
       if (!line) continue;
       let data;
       try { data = JSON.parse(line); } catch { continue; }
+      // Non-token frames are control frames: {done} closes the reply, and a
+      // later {memory_update} carries the memory judge's result.
       if (data.token) yield data.token;
-      if (data.done && onDone) onDone(data);
+      else if (onDone) onDone(data);
     }
   }
 }
@@ -944,9 +946,13 @@ async function streamSpeak(text, audioEl, onSpeakingChange) {
       off += b.length;
     }
     const url = URL.createObjectURL(audioBufferToWav(mergedBuf));
+    // Kept alive so Speak can replay it. Revoking on 'ended' would throw the
+    // audio away after one play and force a regeneration. The previous blob for
+    // this message is released instead, so only one is ever held.
+    if (audioEl.dataset.blobUrl) URL.revokeObjectURL(audioEl.dataset.blobUrl);
+    audioEl.dataset.blobUrl = url;
     audioEl.src = url;
     audioEl.style.display = "block";
-    audioEl.onended = () => URL.revokeObjectURL(url);
   }
 }
 
@@ -1189,9 +1195,18 @@ function MessageBubble({ message, isLive, streamContent, streamPhase, activeChar
     setTimeout(() => setCopied(false), 2000);
   };
 
+  // Replay the audio this message already produced instead of paying for a
+  // second trip through the TTS model, which costs about six seconds of GPU
+  // and returns exactly the same waveform.
   const handleSpeak = () => {
     if (!content.trim()) return;
-    speakText(content, audioRef.current, setSpeaking);
+    const el = audioRef.current;
+    if (el && el.src) {
+      el.currentTime = 0;
+      el.play().catch(() => speakText(content, el, setSpeaking));
+      return;
+    }
+    speakText(content, el, setSpeaking);
   };
 
   // Auto-speak once when an assistant message finishes streaming (if TTS on).
@@ -1308,12 +1323,23 @@ function InputArea() {
     const ctrl = new AbortController();
     abortRef.current = ctrl;
 
+    // The reply is committed as soon as the {done} frame lands rather than when
+    // the response body closes, so speech and the composer are not held up by
+    // the memory judge that still runs after it.
+    let committed = false;
+    const commit = () => {
+      if (committed) return;
+      committed = true;
+      dispatch({ type:'COMMIT_STREAM' });
+    };
+
     try {
-      for await (const chunk of chatStream(content, ctrl.signal, (done) => {
-        // onDone frame: update memory stats
-        if (done && done.memory_count) {
-          dispatch({ type:'SET_MEMORY_COUNT', v:done.memory_count });
+      for await (const chunk of chatStream(content, ctrl.signal, (frame) => {
+        if (!frame) return;
+        if (frame.memory_count) {
+          dispatch({ type:'SET_MEMORY_COUNT', v:frame.memory_count });
         }
+        if (frame.done) commit();
       })) {
         dispatch({ type:'APPEND_STREAM', v:chunk });
         dispatch({ type:'SET_PHASE', v:'' });
@@ -1321,7 +1347,7 @@ function InputArea() {
     } catch(e) {
       if (e.name !== 'AbortError') dispatch({ type:'APPEND_STREAM', v:'\n\n*(Error contacting backend)*' });
     } finally {
-      dispatch({ type:'COMMIT_STREAM' });
+      commit();
       abortRef.current = null;
     }
   }, [input, state, dispatch]);
