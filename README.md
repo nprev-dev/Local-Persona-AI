@@ -49,7 +49,7 @@ The Tauri shell starts Ollama and the Python backend on launch, polls until the 
 
 ---
 
-## Current State (v0.4.0)
+## Current State (v0.5.0)
 
 This is an early working release. Everything below works but some things are still hardcoded or manual:
 
