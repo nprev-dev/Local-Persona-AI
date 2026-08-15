@@ -10,16 +10,18 @@ Local-Persona-AI is a desktop application that lets you run a completely offline
 
 - **Multiple personas** — create as many characters as you want, each saved as its own file with its own personality, traits, rules, and voice. Switch between them or delete them right in the app.
 - **Custom personality** — define any character's speech style, traits, rules, and backstory via a simple JSON file or directly in the app. No coding required.
-- **In-app character editor** — create, edit, and delete characters from the UI. Edit personality, traits, rules, voice style, and response style. Changes save to that persona's file and reload instantly, no restart needed.
+- **In-app character editor** — create, edit, and delete characters from the UI. Edit personality, traits, rules, and response style. Changes save to that persona's file and reload instantly, no restart needed.
 - **Per-persona voices** — every character can have its own voice. Upload a `.wav` sample in the character editor and that persona speaks in that voice. Switching personas switches the voice automatically.
 - **In-app model picker** — automatically detects the Ollama models installed on your machine and lets you switch between them from the UI.
 - **Voice cloning** — provide a short reference audio clip and the AI speaks in that voice using Chatterbox TTS with 7-emotion detection.
 - **Per-character voice toggle** — turn TTS on or off per character. Characters with no voice sample simply stay silent.
 - **Streaming chat** — token-by-token response streaming, ChatGPT-style, fully local via Ollama.
 - **Hybrid memory** — long-term memory system combining BM25 keyword search and FAISS vector search. The AI remembers facts about you across sessions.
-- **Document ingestion** — paste text or upload files to give the AI knowledge of anything you want.
 - **Sentence-by-sentence audio streaming** — TTS starts playing before the full response is generated.
-- **Fully offline UI** — React, Babel, and the icon set are all vendored locally. The interface makes zero outside calls and works with no internet.
+- **Fully offline UI** — React and the icon set are vendored locally, and the interface is precompiled so nothing is transformed in the browser at launch. Zero outside calls, works with no internet.
+- **Saved chats** — every conversation is stored separately and reloads when you reopen the app. Switch between them or delete them from the sidebar.
+- **Working settings** — adjust reply length and temperature from the Settings tab, or leave the tuned defaults alone. Preferences persist between launches.
+- **Sensible character defaults** — new characters start with the rules that keep them in character, so they behave well before you customise anything.
 - **Desktop app** — wrapped in Tauri v2, launches and shuts down cleanly with no terminal windows.
 
 ---
@@ -33,7 +35,7 @@ User input
 FastAPI backend (Python)
     ├── Retrieves relevant long-term memories (BM25 + FAISS hybrid)
     ├── Builds prompt (personality + memories + chat history)
-    ├── Streams tokens from Ollama (llama3.1:8b)
+    ├── Streams tokens from Ollama (qwen2.5:7b)
     └── Streams TTS audio sentence by sentence (Chatterbox)
             │
             ▼
@@ -52,16 +54,16 @@ The Tauri shell starts Ollama and the Python backend on launch, polls until the 
 This is an early working release. Everything below works but some things are still hardcoded or manual:
 
 - **Multiple personas** — create, switch between, and delete characters in the app. Each persona is stored as its own file in `backend/personas/`, with its own voice clip in `backend/personas/voices/`.
-- **Shared chat & memory across personas** — for now all personas share one chat history and memory. Switching a persona changes who's speaking and their voice, not the conversation. Per-persona separate chats are planned.
-- **Model selection in-app** — the app detects your installed Ollama models and lets you pick between them from the UI. The default chat model is `llama3.1:8b` and the memory judge is `phi3`.
+- **Saved separate chats** — each conversation is stored on its own and survives restarts. Starting a new chat gives the AI a clean slate. Long-term memory stays shared across chats, so it still remembers facts about you wherever you are.
+- **Model selection in-app** — the app detects your installed Ollama models and lets you pick between them from the UI. The default chat model is `qwen2.5:7b` and the memory judge is `phi3`.
 - **Model installation is manual** — you need to pull Ollama models yourself for the ones not included in `install.py`.
 - **Personality is fully editable in-app** — define and tweak any character from the UI or by editing its file directly. Either way changes apply without a restart.
 - **Per-persona voices, uploaded in-app** — give each character its own voice by uploading a `.wav` in the character editor. A persona with no voice sample stays silent.
 - **GUI installer included** — run install.py before first launch to install dependencies and pull Ollama models. Located in the backend/ folder.
-- **Single GPU only** — Ollama and Chatterbox share VRAM. On a 12GB card this means long TTS generation time. A dual GPU support setup is planned.
+- **Single GPU only** — Ollama and Chatterbox share VRAM, so TTS speed depends on how much is left once your chat model loads. A 7B leaves comfortable room on a 12GB card; larger models squeeze Chatterbox and slow speech down noticeably. A dual GPU setup is planned.
 - **Windows only** — tested on Windows 11. Linux/Mac untested.
 - **TTS quality depends on your reference clip** — see the Voice Reference Tips below.
-- **Model quality affects personality** — smaller models may partially or fully ignore personality instructions and hard rules. llama3.1:8b is the minimum recommended, larger models follow character instructions significantly better.
+- **Model choice affects personality** — most local models hold character reliably. `mistral` is a known weak spot and drifts out of character noticeably more than the others, so it isn't recommended for persona work. `qwen2.5:7b` is the default and a good starting point.
 - **Aemeath ships by default** — the installer includes Aemeath from Wuthering Waves as a default persona, complete with her voice reference clip. Like any other persona, she can be deleted at any time along with her voice clip.
 
 ---
@@ -121,7 +123,7 @@ Getting a good cloned voice depends a lot on the reference clip you provide. A f
 
 You can edit your characters two ways: directly in the app's character editor, or by hand in their files. Both apply without a restart. Each persona lives in `backend/personas/<id>.json`, with its voice clip at `backend/personas/voices/<id>.wav`.
 
-### Personality (`backend/personality.json`)
+### Personality (`backend/personas/<id>.json`)
 
 ```json
 {
@@ -132,7 +134,6 @@ You can edit your characters two ways: directly in the app's character editor, o
   "hard_rules": ["never breaks character"],
   "hard_constraints": ["never reveals you are an AI"],
   "tts_enabled": true,
-  "voice_style": "expressive",
   "response_style": "balanced"
 }
 ```
@@ -155,7 +156,7 @@ A lot was tried before arriving at the current stack. Documented here for anyone
 | **Python 3.10 venv** | fairseq issues persisted across Python versions |
 | **Chatterbox `conditionals` param** | Doesn't exist in the API — caused runtime errors |
 | **edge-tts as Chatterbox fallback** | Flat and robotic — no character, unusable |
-| **`keep_alive: 0` for Ollama VRAM** | Ollama frequently ignores it during active streaming |
+| **`keep_alive: 0` after every reply** | Works, but reloads the model on every message (~2s each) for no gain when the model and Chatterbox both fit in VRAM. Now decided per model instead |
 | **Disabling Windows hardware GPU acceleration** | Freed no VRAM, broke browser AudioContext |
 | **WAV chunk concatenation for audio player** | Each chunk has its own WAV header — browser only reads the first. Fixed by merging raw PCM data instead |
 | **`window.location.href` redirect in Tauri** | Blocked by Tauri v2 security policy. Fixed by navigating from Rust via `window.navigate()` |
@@ -176,12 +177,13 @@ A lot was tried before arriving at the current stack. Documented here for anyone
 - [ ] Vision support
 - [ ] Linux support
 - [ ] API key support (OpenAI-compatible backends as alternative to Ollama)
-- [ ] Saving and switching between named chats
+- [x] Saving and switching between named chats
 - [ ] Cross-chat persistent memory
 - [ ] Computer access (do things directly on your pc if given permission)
 - [ ] Cleaner install.py
+- [ ] Document ingestion (paste text or upload files to give the AI knowledge)
 - [ ] Persona-locked chats (one persona locked to one desired chat)
-- [ ] Stronger personality adherence (next release — make smaller models hold character better)
+- [x] Stronger personality adherence
 
 ---
 

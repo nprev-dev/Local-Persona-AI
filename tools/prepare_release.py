@@ -30,6 +30,7 @@ EXCLUDE_FILES = {
     "memory_store.db",    # long-term memory: facts extracted about the user
     "settings.json",      # user preferences
     "active.json",        # which persona this user last selected
+    ".gitignore",         # development file, meaningless in a download
 }
 EXCLUDE_DIRS = {
     "chats",              # every conversation the user has had
