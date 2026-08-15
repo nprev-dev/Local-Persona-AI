@@ -4,11 +4,7 @@
 
 Local-Persona-AI is a desktop application that lets you run a completely offline, private AI assistant modeled after any character or persona you choose. You bring the voice reference clip and personality config, the app handles the rest. No cloud, no subscriptions, no data leaving your machine.
 
-> ### ⬇️ Download from [Releases](https://github.com/nprev-dev/Local-Persona-AI/releases) — do not clone
->
-> The release `.zip` is the app. It contains the launcher and the default character **Aemeath**, complete with her voice, ready to run.
->
-> Cloning gets you the source only: no launcher, no default character, and no voice clip. The app will still run, but it starts with a blank generic assistant instead of Aemeath. Clone only if you intend to build it yourself.
+**Download from [Releases](https://github.com/nprev-dev/Local-Persona-AI/releases), don't clone** — the release `.zip` is the app, with the launcher and Aemeath's voice included, ready to run. Cloning gives you the source only, so the app starts with a blank assistant instead of her. Clone only if you intend to build it yourself.
 
 ---
 
