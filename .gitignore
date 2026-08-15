@@ -36,4 +36,7 @@ backend/memory.json
 # Local eval harness (never shipped)
 tests/
 
+# Build and release tooling — internal, not part of what users download
+tools/
+
 .claude/
