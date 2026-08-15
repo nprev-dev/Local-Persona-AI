@@ -25,6 +25,7 @@ from llm_config import (
     max_tokens_for,
     keep_alive_for,
 )
+import settings_store
 
 from memory_engine import (
     init_memory_db,
@@ -51,15 +52,17 @@ USE_OPENAI = False
 CHAT_MODEL   = "qwen2.5:7b"
 MEMORY_MODEL = "phi3"
 
-CURRENT_MODEL = "qwen2.5:7b"
+CURRENT_MODEL = settings_store.load()["model"]
 
 # ── Persona system (multi-persona) ──────────────────────────────────────────────
 # Personas live in personas/<id>.json, each with its own voice clip.
 # Chat history and long-term memory stay shared/global.
 
 import persona_manager as pm
+import chat_store
 
 pm.ensure_setup()  # creates folder / migrates legacy personality.json on first run
+chat_store.ensure_setup()  # creates chats/ and imports a legacy memory.json once
 
 
 def _apply_active_voice():
@@ -92,6 +95,7 @@ print(f"[Personas] Active persona: '{PERSONALITY.get('name', 'Assistant')}'")
 
 class ChatRequest(BaseModel):
     user_input: str
+    conversation_id: str = ""
 
 class IngestRequest(BaseModel):
     text:   str
@@ -174,9 +178,8 @@ def strip_thinking_stream(tokens):
 # _ask_generate uses /api/generate (raw prompt) — used only by the memory judge.
 
 def _chat_options(max_tokens: int) -> dict:
-    options = dict(CHAT_OPTIONS)
-    options["num_predict"] = max_tokens
-    return options
+    """Tuned defaults from llm_config, with the user's temperature applied."""
+    return settings_store.chat_options(max_tokens)
 
 
 def ask_ollama(messages: list, model: str = CHAT_MODEL, max_tokens: int = None,
@@ -184,7 +187,7 @@ def ask_ollama(messages: list, model: str = CHAT_MODEL, max_tokens: int = None,
     if model is None:
         model = CURRENT_MODEL
     if max_tokens is None:
-        max_tokens = max_tokens_for(model)
+        max_tokens = settings_store.effective_max_tokens(model)
     response = requests.post(
         "http://localhost:11434/api/chat",
         json={
@@ -205,7 +208,7 @@ def ask_ollama_stream(messages: list, model: str = CHAT_MODEL, max_tokens: int =
     if model is None:
         model = CURRENT_MODEL
     if max_tokens is None:
-        max_tokens = max_tokens_for(model)
+        max_tokens = settings_store.effective_max_tokens(model)
     response = requests.post(
         "http://localhost:11434/api/chat",
         json={
@@ -286,17 +289,9 @@ def ask_openai(messages: list) -> str:
 
 # ── Chat history ───────────────────────────────────────────────────────────────
 
-def load_chat_memory():
-    try:
-        with open("memory.json", "r", encoding="utf-8") as f:
-            return json.load(f)
-    except:
-        return []
-
-
-def save_chat_memory(data):
-    with open("memory.json", "w", encoding="utf-8") as f:
-        json.dump(data, f, indent=2, ensure_ascii=False)
+def load_chat_memory(conversation_id: str):
+    """Turns for one conversation. History is per conversation, not global."""
+    return chat_store.messages(conversation_id)
 
 
 # ── Prompt builders ────────────────────────────────────────────────────────────
@@ -455,6 +450,7 @@ async def chat(data: ChatRequest):
     import asyncio
 
     user_input = data.user_input.strip()
+    conversation_id = chat_store._safe_id(data.conversation_id) or chat_store.new_id()
 
     # Memory search and the memory judge are blocking and take seconds. Run on
     # the event loop they freeze the whole server, so every other request --
@@ -462,7 +458,7 @@ async def chat(data: ChatRequest):
     # still working -- stalls behind them.
     outer_loop = asyncio.get_event_loop()
 
-    chat_memory       = load_chat_memory()
+    chat_memory       = load_chat_memory(conversation_id)
     relevant_memories = await outer_loop.run_in_executor(
         None, lambda: search_memory(user_input, limit=6)
     )
@@ -497,16 +493,16 @@ async def chat(data: ChatRequest):
         full_reply = full_reply_box["text"]
 
         # Save chat history
-        chat_memory.append({"role": "user",      "content": user_input})
-        chat_memory.append({"role": "assistant", "content": full_reply})
-        save_chat_memory(chat_memory)
+        chat = chat_store.append_turn(conversation_id, user_input, full_reply)
 
         # The reply is final here, so close it out now. The memory judge runs
         # afterwards: it loads a second model and takes seconds, and the client
         # waits on this frame before it starts speaking.
         yield json.dumps({
-            "done":         True,
-            "memory_count": memory_count()
+            "done":            True,
+            "conversation_id": conversation_id,
+            "title":           chat["title"],
+            "memory_count":    memory_count()
         }) + "\n"
 
         # Save memory. This calls a second model and takes seconds, so it runs
@@ -591,19 +587,44 @@ async def get_memory_count():
 
 @app.get("/settings")
 async def get_settings():
-    return {"model": CURRENT_MODEL}
+    """
+    Current settings plus what the tuned defaults are, so the UI can show the
+    real values in force and offer a reset instead of inventing numbers.
+    """
+    current = settings_store.load()
+    return {
+        **current,
+        "model": CURRENT_MODEL,
+        "defaults": settings_store.defaults(),
+        "auto_max_tokens": max_tokens_for(CURRENT_MODEL),
+        "limits": {
+            "temperature": [settings_store.TEMP_MIN, settings_store.TEMP_MAX],
+            "max_tokens":  [settings_store.TOKENS_MIN, settings_store.TOKENS_MAX],
+        },
+    }
 
 
 @app.post("/settings")
 async def update_settings(settings: dict):
     global CURRENT_MODEL
-    if "model" in settings and settings["model"] != CURRENT_MODEL:
-        previous = CURRENT_MODEL
-        CURRENT_MODEL = settings["model"]
-        # The old model can now sit in VRAM unused for the rest of its keep_alive
-        # window, so evict it rather than starve the new one.
+    previous = CURRENT_MODEL
+
+    try:
+        saved = settings_store.update(settings or {})
+    except RuntimeError as e:
+        return {"status": "error", "message": str(e)}
+
+    CURRENT_MODEL = saved["model"]
+    if CURRENT_MODEL != previous:
+        # The old model would otherwise sit in VRAM unused for the rest of its
+        # keep_alive window, starving the new one.
         unload_model(previous)
-    return {"status": "ok", "model": CURRENT_MODEL}
+
+    return {
+        "status": "ok",
+        **saved,
+        "auto_max_tokens": max_tokens_for(CURRENT_MODEL),
+    }
 
 
 @app.get("/models")
@@ -789,10 +810,41 @@ async def personas_upload_voice(pid: str, file: UploadFile = File(...)):
     return {"status": "ok", "persona": pm.load_persona(pid)}
 
 
+@app.get("/chats")
+async def chats_list():
+    return {"chats": chat_store.summaries()}
+
+
+@app.get("/chats/{cid}")
+async def chats_get(cid: str):
+    if not chat_store.exists(cid):
+        return Response(status_code=404)
+    return chat_store.load(cid)
+
+
+@app.post("/chats/{cid}/rename")
+async def chats_rename(cid: str, payload: dict):
+    title = (payload or {}).get("title", "")
+    if not chat_store.rename(cid, title):
+        return Response(status_code=404)
+    return {"status": "ok", "chat": chat_store.load(cid)}
+
+
+@app.delete("/chats/{cid}")
+async def chats_delete(cid: str):
+    if not chat_store.delete(cid):
+        return {"status": "error", "message": "Conversation not found."}
+    return {"status": "ok", "chats": chat_store.summaries()}
+
+
 @app.post("/clear-memory")
 async def clear_chat_memory():
-    save_chat_memory([])
-    return {"status": "ok", "message": "Chat memory cleared."}
+    """Delete every conversation. Long-term memory is separate and untouched."""
+    removed = 0
+    for cid in chat_store.list_ids():
+        if chat_store.delete(cid):
+            removed += 1
+    return {"status": "ok", "deleted": removed}
 
 
 @app.post("/clear-long-term-memory")

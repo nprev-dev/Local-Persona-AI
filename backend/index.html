@@ -278,6 +278,14 @@ input[type=range]{accent-color:var(--accent);height:20px;cursor:pointer}
   transition:background .12s var(--ease),color .12s var(--ease);
 }
 .conv-item:hover{background:var(--wash);color:var(--text-1)}
+/* Row wrapper so the delete control is a sibling, not a button inside a button */
+.conv-row{position:relative;display:flex;align-items:center}
+.conv-row .conv-item{flex:1;min-width:0;padding-right:30px}
+.conv-row .conv-del{
+  position:absolute;right:4px;width:22px;height:22px;
+  opacity:0;transition:opacity .12s var(--ease);
+}
+.conv-row:hover .conv-del,.conv-row:focus-within .conv-del{opacity:1}
 .conv-item.active{background:var(--accent-tint);color:var(--text-1)}
 .conv-item.active::before{
   content:"";position:absolute;left:4px;top:7px;bottom:7px;width:2.5px;
@@ -338,6 +346,8 @@ input[type=range]{accent-color:var(--accent);height:20px;cursor:pointer}
 
 /* ── Chat ─────────────────────────────────────────────────────── */
 .chat-scroll{flex:1;overflow-y:auto;min-height:0}
+.chat-scroll.compact .msg-row,.chat-scroll.compact .row-user{margin-bottom:8px}
+.chat-scroll.compact .msg-content{line-height:1.55}
 .chat-col{max-width:760px;margin:0 auto;padding:28px 20px 8px}
 
 .row-user{display:flex;justify-content:flex-end;margin-bottom:18px;animation:fade-in .18s var(--ease)}
@@ -754,6 +764,9 @@ const initialState = {
   activeCharId: 'default',
   modelPickerOpen: false,
   memoryCount: { facts: 0, chunks: 0 },
+  // Replaced by the backend's real values on boot; these only cover the moment
+  // before that request lands.
+  settings: { temperature: 0.6, max_tokens: null, compact_messages: false, auto_scroll: true },
 };
 
 function reducer(s, a) {
@@ -764,10 +777,11 @@ function reducer(s, a) {
     case 'SET_MODELS':         return { ...s, models: a.v };
     case 'SET_CHARACTERS':     return { ...s, characters: a.v.length ? a.v : s.characters };
     case 'SET_MEMORY_COUNT':   return { ...s, memoryCount: a.v };
+    case 'SET_SETTINGS':       return { ...s, settings: { ...s.settings, ...a.v } };
     case 'TOGGLE_MODEL_PICKER':return { ...s, modelPickerOpen: !s.modelPickerOpen };
     case 'CLOSE_MODEL_PICKER': return { ...s, modelPickerOpen: false };
     case 'NEW_CONV': {
-      const id = uid();
+      const id = a.id || uid();
       return {
         ...s,
         conversations: [{ id, title: 'New chat', messages: [], createdAt: Date.now() }, ...s.conversations],
@@ -782,6 +796,30 @@ function reducer(s, a) {
       const c = s.conversations.find(x => x.id === a.v);
       if (!c) return s;
       return { ...s, activeId: a.v, messages: c.messages || [], streaming: false, streamContent: '', page: 'chat' };
+    }
+    // Sidebar contents come from the backend, which is the source of truth for
+    // history. Summaries carry no messages; those arrive on switch.
+    case 'SET_CONVERSATIONS': {
+      const byId = Object.fromEntries(s.conversations.map(c => [c.id, c]));
+      return {
+        ...s,
+        conversations: a.v.map(sum => ({
+          id: sum.id,
+          title: sum.title,
+          createdAt: sum.created_at,
+          messages: (byId[sum.id] && byId[sum.id].messages) || [],
+        })),
+      };
+    }
+    case 'SET_CONV_MESSAGES': {
+      const convs = s.conversations.map(c => c.id === a.id ? { ...c, messages: a.v } : c);
+      const isActive = s.activeId === a.id;
+      return { ...s, conversations: convs, messages: isActive ? a.v : s.messages };
+    }
+    case 'REMOVE_CONV': {
+      const convs = s.conversations.filter(c => c.id !== a.v);
+      if (s.activeId !== a.v) return { ...s, conversations: convs };
+      return { ...s, conversations: convs, activeId: null, messages: [], streamContent: '', streaming: false };
     }
     case 'ADD_MSG': {
       const msgs = [...s.messages, a.v];
@@ -828,11 +866,11 @@ function useStore() { return useContext(Ctx); }
 // Streams tokens from POST /chat (NDJSON). Yields token strings.
 // Captures the final {done:true, memory_count} frame via onDone callback.
 // ─────────────────────────────────────────────────────────────
-async function* chatStream(userInput, signal, onDone) {
+async function* chatStream(userInput, signal, onDone, conversationId) {
   const res = await fetch(API + "/chat", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ user_input: userInput }),
+    body: JSON.stringify({ user_input: userInput, conversation_id: conversationId || "" }),
     signal,
   });
   if (!res.ok || !res.body) throw new Error("chat request failed");
@@ -1109,14 +1147,38 @@ function Sidebar() {
               </div>
             )}
             {filtered.map(conv => (
+              <div className="conv-row" key={conv.id}>
               <button
-                key={conv.id}
                 className={'conv-item' + (state.activeId === conv.id ? ' active' : '')}
-                onClick={() => dispatch({ type:'LOAD_CONV', v:conv.id })}
+                onClick={async () => {
+                  dispatch({ type:'LOAD_CONV', v:conv.id });
+                  // Sidebar summaries carry no messages, so pull the transcript.
+                  try {
+                    const r = await fetch(API + "/chats/" + conv.id);
+                    if (r.ok) {
+                      const full = await r.json();
+                      dispatch({ type:'SET_CONV_MESSAGES', id: conv.id,
+                        v: (full.messages || []).map(m => ({ id: uid(), role: m.role, content: m.content })) });
+                    }
+                  } catch (e) { /* keep whatever is cached */ }
+                }}
                 title={conv.title}
               >
                 {conv.title}
               </button>
+              <button
+                className="icon-btn danger conv-del"
+                title="Delete chat"
+                onClick={async (e) => {
+                  e.stopPropagation();
+                  dispatch({ type:'REMOVE_CONV', v:conv.id });
+                  try { await fetch(API + "/chats/" + conv.id, { method:"DELETE" }); }
+                  catch (err) { /* the row is already gone locally */ }
+                }}
+              >
+                <i className="ti ti-trash" style={{ fontSize:13 }} />
+              </button>
+              </div>
             ))}
           </div>
 
@@ -1334,7 +1396,11 @@ function InputArea() {
     if (!state.selectedModel) return;
     setInput('');
 
-    if (!state.activeId) dispatch({ type:'NEW_CONV' });
+    // The id is generated here rather than read back from NEW_CONV: dispatch does
+    // not update state synchronously, so state.activeId would still be null on the
+    // next line. The backend creates the conversation file on first write.
+    const convId = state.activeId || uid();
+    if (!state.activeId) dispatch({ type:'NEW_CONV', id: convId });
 
     const userMsg = { id:uid(), role:'user', content, timestamp:Date.now() };
     dispatch({ type:'ADD_MSG', v:userMsg });
@@ -1363,7 +1429,15 @@ function InputArea() {
           dispatch({ type:'SET_MEMORY_COUNT', v:frame.memory_count });
         }
         if (frame.done) commit();
-      })) {
+        // The judge frame lands last, so refreshing the sidebar here also picks
+        // up the title the backend derived from the first message.
+        if (frame.memory_update) {
+          fetch(API + "/chats")
+            .then(r => r.ok ? r.json() : null)
+            .then(d => { if (d && Array.isArray(d.chats)) dispatch({ type:'SET_CONVERSATIONS', v:d.chats }); })
+            .catch(() => {});
+        }
+      }, convId)) {
         dispatch({ type:'APPEND_STREAM', v:chunk });
         dispatch({ type:'SET_PHASE', v:'' });
       }
@@ -1423,10 +1497,11 @@ function ChatPage() {
   const activeChar = state.characters.find(c => c.id === state.activeCharId) || state.characters[0];
 
   useEffect(() => {
+    if (state.settings.auto_scroll === false) return;
     if (autoScroll.current && listRef.current) {
       listRef.current.scrollTop = listRef.current.scrollHeight;
     }
-  }, [state.messages, state.streamContent]);
+  }, [state.messages, state.streamContent, state.settings.auto_scroll]);
 
   const isEmpty = state.messages.length === 0 && !state.streaming;
 
@@ -1434,7 +1509,7 @@ function ChatPage() {
     <div style={{ display:'flex', flexDirection:'column', height:'100%' }}>
       <div
         ref={listRef}
-        className="chat-scroll"
+        className={'chat-scroll' + (state.settings.compact_messages ? ' compact' : '')}
         onScroll={() => {
           if (!listRef.current) return;
           const { scrollTop, scrollHeight, clientHeight } = listRef.current;
@@ -2273,80 +2348,137 @@ function DashboardPage() {
 // ─────────────────────────────────────────────────────────────
 function SettingsPage() {
   const { state, dispatch } = useStore();
-  const [apiUrl, setApiUrl] = useState('http://localhost:8000');
-  const [maxTokens, setMaxTokens] = useState(2048);
-  const [temperature, setTemperature] = useState(0.7);
-  const [streaming, setStreamingPref] = useState(true);
-  const [saved, setSaved] = useState(false);
+  const s = state.settings || {};
+  const defaults = s.defaults || { temperature: 0.6, max_tokens: null };
+  const autoTokens = s.auto_max_tokens || 400;
 
-  const save = () => {
-    setSaved(true);
-    setTimeout(() => setSaved(false), 2000);
+  // Generation parameters are hidden behind Advanced: the tuned defaults are
+  // right for most people, and a mis-set temperature quietly degrades character
+  // adherence rather than failing loudly.
+  const [advanced, setAdvanced] = useState(false);
+  const [status, setStatus] = useState('');   // '' | 'saving' | 'saved' | 'error'
+
+  const patch = (v) => dispatch({ type:'SET_SETTINGS', v });
+
+  const save = async () => {
+    setStatus('saving');
+    try {
+      const r = await fetch(API + "/settings", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          temperature:      s.temperature,
+          max_tokens:       s.max_tokens,
+          compact_messages: !!s.compact_messages,
+          auto_scroll:      s.auto_scroll !== false,
+        }),
+      });
+      const data = await r.json();
+      if (!r.ok || data.status === 'error') throw new Error(data.message || 'save failed');
+      patch(data);
+      setStatus('saved');
+      setTimeout(() => setStatus(''), 2000);
+    } catch (e) {
+      setStatus('error');
+      setTimeout(() => setStatus(''), 4000);
+    }
   };
+
+  const atDefaults =
+    Math.abs((s.temperature ?? defaults.temperature) - defaults.temperature) < 0.001 &&
+    (s.max_tokens ?? null) === null;
 
   return (
     <div className="page-scroll">
       <div className="page-col narrow">
         <div className="page-head">
           <h1 className="page-title">Settings</h1>
-          <p className="page-desc">Configure your backend, generation parameters, and preferences.</p>
+          <p className="page-desc">Preferences for this app. Saved on your machine.</p>
         </div>
-
-        <Section title="Backend">
-          <div style={{ marginBottom: 16 }}>
-            <label className="label-caps" style={{ marginBottom: 6 }}>API Endpoint</label>
-            <input className="text-input" value={apiUrl} onChange={e=>setApiUrl(e.target.value)} />
-            <div className="field-hint">
-              The base URL of your inference server (e.g. Ollama, FastAPI, LiteLLM).
-            </div>
-          </div>
-          <SettingRow label="Streaming Responses" description="Receive tokens as they are generated." icon="ti-bolt">
-            <Toggle value={streaming} onChange={setStreamingPref} />
-          </SettingRow>
-        </Section>
-
-        <Section title="Generation">
-          <div style={{ marginBottom: 18 }}>
-            <label className="label-caps" style={{ marginBottom: 6 }}>
-              Max Tokens — <span style={{ color:'var(--text-1)', fontWeight:600 }}>{maxTokens.toLocaleString()}</span>
-            </label>
-            <input type="range" min={128} max={8192} step={128} value={maxTokens}
-              onChange={e=>setMaxTokens(+e.target.value)}
-              style={{ width:'100%' }} />
-            <div className="range-scale">
-              <span>128</span><span>8192</span>
-            </div>
-          </div>
-          <div>
-            <label className="label-caps" style={{ marginBottom: 6 }}>
-              Temperature — <span style={{ color:'var(--text-1)', fontWeight:600 }}>{temperature.toFixed(1)}</span>
-            </label>
-            <input type="range" min={0} max={2} step={0.1} value={temperature}
-              onChange={e=>setTemperature(parseFloat(e.target.value))}
-              style={{ width:'100%' }} />
-            <div className="range-scale">
-              <span>0 — Precise</span><span>2 — Creative</span>
-            </div>
-          </div>
-        </Section>
 
         <Section title="Interface">
           <div style={{ display:'flex', flexDirection:'column', gap:14 }}>
             <SettingRow label="Compact Message Density" description="Reduce vertical spacing between messages." icon="ti-layout-list">
-              <Toggle value={false} onChange={()=>{}} />
+              <Toggle value={!!s.compact_messages} onChange={v => patch({ compact_messages: v })} />
             </SettingRow>
-            <SettingRow label="Show Token Usage" description="Display prompt/completion token counts below messages." icon="ti-hash">
-              <Toggle value={false} onChange={()=>{}} />
-            </SettingRow>
-            <SettingRow label="Auto-scroll" description="Scroll to bottom as responses stream in." icon="ti-arrow-down">
-              <Toggle value={true} onChange={()=>{}} />
+            <SettingRow label="Auto-scroll" description="Follow the reply as it streams in." icon="ti-arrow-down">
+              <Toggle value={s.auto_scroll !== false} onChange={v => patch({ auto_scroll: v })} />
             </SettingRow>
           </div>
         </Section>
 
-        <div style={{ display:'flex', justifyContent:'flex-end' }}>
-          <button className={'btn-primary' + (saved ? ' saved' : '')} onClick={save}>
-            {saved ? <><i className="ti ti-check" />Saved</> : 'Save Settings'}
+        <Section title="Generation">
+          <SettingRow
+            label="Advanced parameters"
+            description={atDefaults
+              ? "Using the tuned defaults. Change these only if you know what they do."
+              : "Customised. These override the tuned defaults."}
+            icon="ti-adjustments">
+            <Toggle value={advanced} onChange={setAdvanced} />
+          </SettingRow>
+
+          {advanced && (
+            <div style={{ marginTop: 18, display:'flex', flexDirection:'column', gap: 20 }}>
+
+              <div>
+                <label className="label-caps" style={{ marginBottom: 6 }}>
+                  Temperature — <span style={{ color:'var(--text-1)', fontWeight:600 }}>
+                    {Number(s.temperature ?? defaults.temperature).toFixed(1)}
+                  </span>
+                  {Math.abs((s.temperature ?? defaults.temperature) - defaults.temperature) < 0.001 && (
+                    <span style={{ color:'var(--text-3)', fontWeight:400 }}> · recommended</span>
+                  )}
+                </label>
+                <input type="range" min={0} max={2} step={0.1}
+                  value={s.temperature ?? defaults.temperature}
+                  onChange={e => patch({ temperature: parseFloat(e.target.value) })}
+                  style={{ width:'100%' }} />
+                <div className="range-scale"><span>0 — Precise</span><span>2 — Creative</span></div>
+                <div className="field-hint">
+                  {defaults.temperature} was chosen by measurement: higher values make smaller
+                  models drift out of character.
+                </div>
+              </div>
+
+              <div>
+                <label className="label-caps" style={{ marginBottom: 6 }}>
+                  Reply Length Limit — <span style={{ color:'var(--text-1)', fontWeight:600 }}>
+                    {s.max_tokens ? s.max_tokens.toLocaleString() + ' tokens' : 'Automatic'}
+                  </span>
+                </label>
+                <input type="range" min={0} max={8192} step={128}
+                  value={s.max_tokens || 0}
+                  onChange={e => { const v = +e.target.value; patch({ max_tokens: v === 0 ? null : Math.max(64, v) }); }}
+                  style={{ width:'100%' }} />
+                <div className="range-scale"><span>Automatic</span><span>8192</span></div>
+                <div className="field-hint">
+                  Automatic uses {autoTokens.toLocaleString()} for the current model, and more for
+                  reasoning models, which spend part of the budget thinking before they reply.
+                </div>
+              </div>
+
+              {!atDefaults && (
+                <button className="btn" style={{ alignSelf:'flex-start' }}
+                  onClick={() => patch({ temperature: defaults.temperature, max_tokens: null })}>
+                  <i className="ti ti-rotate" />
+                  Reset to recommended
+                </button>
+              )}
+            </div>
+          )}
+        </Section>
+
+        <div style={{ display:'flex', justifyContent:'flex-end', alignItems:'center', gap:12 }}>
+          {status === 'error' && (
+            <span style={{ fontSize:12.5, color:'var(--danger)' }}>Could not save. Is the backend running?</span>
+          )}
+          <button
+            className={'btn-primary' + (status === 'saved' ? ' saved' : '')}
+            onClick={save}
+            disabled={status === 'saving'}>
+            {status === 'saved'
+              ? <><i className="ti ti-check" />Saved</>
+              : status === 'saving' ? 'Saving…' : 'Save Settings'}
           </button>
         </div>
 
@@ -2386,6 +2518,21 @@ function App() {
         if (r.ok) {
           const c = await r.json();
           dispatch({ type:'SET_MEMORY_COUNT', v:c });
+        }
+      } catch (e) { /* ignore */ }
+
+      // Saved preferences
+      try {
+        const r = await fetch(API + "/settings");
+        if (r.ok) dispatch({ type:'SET_SETTINGS', v: await r.json() });
+      } catch (e) { /* ignore */ }
+
+      // Saved conversations
+      try {
+        const r = await fetch(API + "/chats");
+        if (r.ok) {
+          const data = await r.json();
+          if (Array.isArray(data.chats)) dispatch({ type:'SET_CONVERSATIONS', v:data.chats });
         }
       } catch (e) { /* ignore */ }
     })();
