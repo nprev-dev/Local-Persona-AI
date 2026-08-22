@@ -910,7 +910,19 @@ let ttsPending = null;
 
 // Tracks which assistant message ids have already been auto-spoken, so
 // remounting the chat view (e.g. after visiting Characters) doesn't replay them.
+// Keyed by "<conversationId>:<index>", NOT by message.id — ids are regenerated
+// every time a conversation is loaded from the backend, so they cannot identify
+// the same message twice.
 const spokenMessages = new Set();
+
+// Finished audio for this session: message key -> blob URL. Survives switching
+// chats and pages because it lives outside React. Dies with the page, which is
+// exactly "gone when the user closes the session".
+const audioCache = new Map();
+
+// Which message is being spoken right now, so clicking Speak during auto-speak
+// does not queue a second identical synthesis.
+let speakingKey = null;
 
 function audioBufferToWav(buffer) {
   const numCh = buffer.numberOfChannels;
@@ -938,7 +950,7 @@ function audioBufferToWav(buffer) {
 }
 
 // Streams /speak, plays gaplessly, and resolves an <audio>-ready URL.
-async function streamSpeak(text, audioEl, onSpeakingChange) {
+async function streamSpeak(text, audioEl, onSpeakingChange, cacheKey) {
   const res = await fetch(API + "/speak", {
     method: "POST",
     headers: { "Content-Type": "application/json" },
@@ -1010,24 +1022,32 @@ async function streamSpeak(text, audioEl, onSpeakingChange) {
     // Kept alive so Speak can replay it. Revoking on 'ended' would throw the
     // audio away after one play and force a regeneration. The previous blob for
     // this message is released instead, so only one is ever held.
-    if (audioEl.dataset.blobUrl) URL.revokeObjectURL(audioEl.dataset.blobUrl);
     audioEl.dataset.blobUrl = url;
     audioEl.src = url;
     audioEl.style.display = "block";
+    // Remembered for the session so leaving the chat and coming back restores
+    // the player instead of losing it.
+    if (cacheKey) audioCache.set(cacheKey, url);
   }
 }
 
 // Public entry: speak text, preventing overlap between messages.
-async function speakText(text, audioEl, onSpeakingChange) {
-  if (ttsPlaying) { ttsPending = { text, audioEl, onSpeakingChange }; return; }
+async function speakText(text, audioEl, onSpeakingChange, cacheKey) {
+  // Never queue the same message twice — that is the double-speak.
+  if (cacheKey && (speakingKey === cacheKey ||
+      (ttsPending && ttsPending.cacheKey === cacheKey))) return;
+
+  if (ttsPlaying) { ttsPending = { text, audioEl, onSpeakingChange, cacheKey }; return; }
   ttsPlaying = true;
+  speakingKey = cacheKey || null;
   try {
-    await streamSpeak(text, audioEl, onSpeakingChange);
+    await streamSpeak(text, audioEl, onSpeakingChange, cacheKey);
   } catch (e) { /* ignore */ }
   ttsPlaying = false;
+  speakingKey = null;
   if (ttsPending) {
     const next = ttsPending; ttsPending = null;
-    speakText(next.text, next.audioEl, next.onSpeakingChange);
+    speakText(next.text, next.audioEl, next.onSpeakingChange, next.cacheKey);
   }
 }
 
@@ -1266,7 +1286,7 @@ function ModelPicker() {
 // ─────────────────────────────────────────────────────────────
 // MESSAGE BUBBLE
 // ─────────────────────────────────────────────────────────────
-function MessageBubble({ message, isLive, streamContent, streamPhase, activeChar }) {
+function MessageBubble({ message, isLive, streamContent, streamPhase, activeChar, audioKey }) {
   const isUser = message.role === 'user';
   const [copied, setCopied] = useState(false);
   const [speaking, setSpeaking] = useState(false);
@@ -1285,27 +1305,50 @@ function MessageBubble({ message, isLive, streamContent, streamPhase, activeChar
   // and returns exactly the same waveform.
   const handleSpeak = () => {
     if (!content.trim()) return;
+    // Already talking about this very message — ignore rather than queue a
+    // second identical synthesis.
+    if (speakingKey && speakingKey === audioKey) return;
+
     const el = audioRef.current;
-    if (el && el.src) {
+    const cached = audioKey ? audioCache.get(audioKey) : null;
+    if (el && cached) {
       el.currentTime = 0;
-      el.play().catch(() => speakText(content, el, setSpeaking));
+      el.play().catch(() => {});
       return;
     }
-    speakText(content, el, setSpeaking);
+    speakText(content, el, setSpeaking, audioKey);
   };
 
-  // Auto-speak once when an assistant message finishes streaming (if TTS on).
-  // Uses a module-level set keyed by message id so navigating away and back
-  // (which remounts this component) does NOT replay old messages.
+  // The <audio> element is a brand new DOM node after a remount (leaving the
+  // chat, switching conversations), so put back any audio already generated for
+  // this message instead of losing the player bar.
+  useEffect(() => {
+    const el = audioRef.current;
+    if (!el || !audioKey) return;
+    const url = audioCache.get(audioKey);
+    if (url && el.src !== url) {
+      el.src = url;
+      el.style.display = 'block';
+    }
+  }, [audioKey, message.content]);
+
+  // Auto-speak once, the first time a reply finishes streaming.
+  //
+  // Keyed on audioKey ("<conversationId>:<index>") rather than message.id:
+  // message ids are regenerated every time a conversation is loaded from the
+  // backend, so the old guard never matched after leaving and returning, and
+  // the whole conversation would start talking again.
   useEffect(() => {
     if (isUser) return;
-    if (isLive) return;                          // wait until streaming done
+    if (isLive) return;                        // wait until streaming done
     if (!activeChar.ttsEnabled) return;
     if (!message.content.trim()) return;
-    if (spokenMessages.has(message.id)) return;  // already spoke this one
-    spokenMessages.add(message.id);
-    speakText(message.content, audioRef.current, setSpeaking);
-  }, [isLive, isUser, activeChar.ttsEnabled, message.content, message.id]);
+    if (!audioKey) return;
+    if (spokenMessages.has(audioKey)) return;  // already spoke this one
+    if (audioCache.has(audioKey)) return;      // already have its audio
+    spokenMessages.add(audioKey);
+    speakText(message.content, audioRef.current, setSpeaking, audioKey);
+  }, [isLive, isUser, activeChar.ttsEnabled, message.content, audioKey]);
 
   if (isUser) {
     return (
@@ -1547,6 +1590,7 @@ function ChatPage() {
                   streamContent={state.streamContent}
                   streamPhase={state.streamPhase}
                   activeChar={activeChar}
+                  audioKey={(state.activeId || 'new') + ':' + i}
                 />
               );
             })}
@@ -1565,6 +1609,16 @@ function ChatPage() {
 const AVATAR_COLORS = ['#22d3ee','#a78bfa','#f5a524','#3ddc97','#ff6b6b','#f472b6','#60a5fa','#fb923c'];
 const VOICE_STYLES = ['neutral','formal','casual','expressive'];
 const RESPONSE_STYLES = ['concise','balanced','detailed'];
+
+// The 23 languages Chatterbox can speak. Must stay in step with
+// SUPPORTED_LANGUAGES in chatterbox/mtl_tts.py and the map in tts_engine.py.
+// This also steers the written reply, not just the voice.
+const TTS_LANGUAGES = [
+  'English','French','German','Spanish','Italian','Portuguese','Dutch',
+  'Danish','Finnish','Norwegian','Swedish','Polish','Greek','Turkish',
+  'Russian','Arabic','Hebrew','Hindi','Chinese','Japanese','Korean',
+  'Malay','Swahili',
+];
 
 function CharactersPage() {
   const { state, dispatch } = useStore();
@@ -1861,6 +1915,22 @@ function CharactersPage() {
                 </SettingRow>
               )}
 
+              {/* Spoken language — shown when TTS on, right above the clip */}
+              {activeChar.ttsEnabled && (
+                <SettingRow
+                  label="Language"
+                  description="Language this character speaks and writes in."
+                  icon="ti-language"
+                  indent
+                >
+                  <SelectInput
+                    value={activeChar._language || 'English'}
+                    options={TTS_LANGUAGES}
+                    onChange={v => persistChar({ ...activeChar, _language:v })}
+                  />
+                </SettingRow>
+              )}
+
               {/* Voice sample upload — shown when TTS on */}
               {activeChar.ttsEnabled && (
                 <SettingRow
@@ -2133,6 +2203,12 @@ function CharacterEditor({ char, onChange, onSave, onCancel, isNew }) {
             {char.ttsEnabled && (
               <SettingRow label="Voice Style" description="Tone for speech output." icon="ti-microphone" indent>
                 <SelectInput value={char.voiceStyle} options={VOICE_STYLES} onChange={v => set('voiceStyle', v)} />
+              </SettingRow>
+            )}
+
+            {char.ttsEnabled && (
+              <SettingRow label="Language" description="Language this character speaks and writes in." icon="ti-language" indent>
+                <SelectInput value={char._language || 'English'} options={TTS_LANGUAGES} onChange={v => set('_language', v)} />
               </SettingRow>
             )}
 

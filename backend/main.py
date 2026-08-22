@@ -17,7 +17,7 @@ import json
 import re
 import os
 from pydantic import BaseModel
-from tts_engine import synthesize, synthesize_sentence, set_reference_clip
+from tts_engine import synthesize, synthesize_sentence, set_reference_clip, set_language
 from llm_config import (
     CHAT_OPTIONS,
     CHAT_MAX_TOKENS,
@@ -68,6 +68,14 @@ chat_store.ensure_setup()  # creates chats/ and imports a legacy memory.json onc
 def _apply_active_voice():
     """Point the TTS engine at the active persona's voice clip (if it has one)."""
     p = pm.get_active_persona()
+
+    # The persona's language already steers the written reply; it steers the
+    # spoken one too, otherwise French text gets read by an English tokenizer.
+    try:
+        set_language(p.get("language", "English"))
+    except Exception as e:
+        print(f"[TTS] Could not set language: {e}")
+
     clip = p.get("voice_clip", "")
     if clip and os.path.exists(clip):
         try:

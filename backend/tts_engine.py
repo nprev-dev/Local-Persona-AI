@@ -43,13 +43,44 @@ EMOTION_PROFILES = {
 _model     = None
 _classifier = None
 
+# Chatterbox ships an English-only model and a multilingual one. The English
+# tokenizer mangles accented text, so French input spoken by it comes out wrong.
+# The multilingual model needs a language_id on every generate() call.
+_language_id = "en"
+
+# Persona files store a human-readable language ("French"), so accept both that
+# and a raw code. Anything unrecognised falls back to English rather than raising,
+# because a bad label should not silence the character.
+_LANGUAGE_CODES = {
+    "arabic": "ar", "danish": "da", "german": "de", "deutsch": "de",
+    "greek": "el", "english": "en", "finnish": "fi",
+    "spanish": "es", "espanol": "es",
+    "español": "es", "french": "fr", "francais": "fr", "français": "fr",
+    "hebrew": "he", "hindi": "hi", "italian": "it", "italiano": "it",
+    "japanese": "ja", "korean": "ko", "malay": "ms", "dutch": "nl",
+    "norwegian": "no", "polish": "pl", "portuguese": "pt", "russian": "ru",
+    "swedish": "sv", "swahili": "sw", "turkish": "tr", "chinese": "zh",
+}
+_SUPPORTED = set(_LANGUAGE_CODES.values())
+
+
+def set_language(language: str):
+    """Point TTS at a language. Accepts 'French' or 'fr'."""
+    global _language_id
+    key = str(language or "").strip().lower()
+    code = _LANGUAGE_CODES.get(key, key if key in _SUPPORTED else "en")
+    if code != _language_id:
+        _language_id = code
+        print(f"[TTS] Language set to: {code}")
+    return _language_id
+
 
 def _get_model():
     global _model
     if _model is not None:
         return _model
     try:
-        from chatterbox.tts import ChatterboxTTS
+        from chatterbox.mtl_tts import ChatterboxMultilingualTTS
     except ImportError:
         raise RuntimeError("Run: pip install chatterbox-tts") # if missing dependency
     
@@ -62,7 +93,7 @@ def _get_model():
  
     device = "cuda" if torch.cuda.is_available() else "cpu"
     print(f"[TTS] Loading Chatterbox on {device}...")
-    _model = ChatterboxTTS.from_pretrained(device=device)
+    _model = ChatterboxMultilingualTTS.from_pretrained(device=device)
     print("[TTS] Chatterbox ready ✓")
     return _model
  
@@ -177,6 +208,7 @@ def synthesize(text: str) -> bytes:
  
             wav = model.generate(
                 sentence,
+                language_id       = _language_id,
                 audio_prompt_path = REFERENCE_CLIP,
                 exaggeration      = profile["exaggeration"],
                 cfg_weight        = profile["cfg"],
@@ -236,6 +268,7 @@ def synthesize_sentence(text: str) -> bytes:
         model = _get_model()
         wav = model.generate(
             text,
+            language_id       = _language_id,
             audio_prompt_path = REFERENCE_CLIP,
             exaggeration      = profile["exaggeration"],
             cfg_weight        = profile["cfg"],
